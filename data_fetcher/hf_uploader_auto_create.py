@@ -1,11 +1,11 @@
 """
-Hugging Face 数据集上传器 - 一次性上传整个资料夾
+Hugging Face 数据集上传器 - 一次性上传整个资料夹
 
 功能:
 - 自动创建数据集 repo
 - CSV 转换为 Parquet
 - 按币种分类组织
-- 一次性上传整个资料夾（減少 API 限制風險）
+- 一次性上传整个资料夹（减少 API 限制风险）
 
 使用方式:
 !pip install -q huggingface-hub pandas
@@ -21,13 +21,13 @@ from pathlib import Path
 from datetime import datetime
 
 try:
-    from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo
+    from huggingface_hub import HfApi, repo_exists, create_repo, login
     import pandas as pd
 except ImportError:
     print("[Installing required packages...]")
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "huggingface-hub", "pandas"])
-    from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo
+    from huggingface_hub import HfApi, repo_exists, create_repo, login
     import pandas as pd
     print("Packages installed successfully\n")
 
@@ -50,14 +50,6 @@ def get_hf_token():
     print("STEP 1: HUGGING FACE TOKEN")
     print("="*70)
     
-    # 检查是否已经设置
-    saved_token = HfFolder.get_token()
-    if saved_token:
-        print(f"Found saved token: {saved_token[:10]}...")
-        use_saved = input("Use saved token? (y/n, default=y): ").strip().lower()
-        if use_saved != 'n':
-            return saved_token
-    
     print("\nHow to get your token:")
     print("1. Visit: https://huggingface.co/settings/tokens")
     print("2. Click 'New token'")
@@ -77,7 +69,7 @@ def get_hf_token():
         user_info = api.whoami()
         username = user_info['name']
         log(f"Token verified. Username: {username}", "SUCCESS")
-        return token
+        return token, username
     except Exception as e:
         log(f"Invalid token: {str(e)}", "ERROR")
         sys.exit(1)
@@ -139,7 +131,7 @@ def get_data_directory():
 
 def parse_symbol_and_interval(filename):
     """
-    介文件名分析币种和时间框架
+    从文件名解析币种和时间框架
     例: BTC_15m.csv -> (BTC, BTCUSDT, 15m)
     """
     SYMBOL_MAP = {
@@ -239,7 +231,7 @@ def organize_files_by_symbol(data_dir):
     return organized_dir, file_count, total_rows, total_size
 
 def create_readme(repo_name, file_count, total_rows, total_size):
-    """申生 README.md"""
+    """生成 README.md"""
     
     readme_content = f"""---
 license: mit
@@ -329,15 +321,15 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
     
     # 检查 repo 是否存在
     print(f"\nChecking if repo exists...")
-    if repo_exists(repo_id, repo_type="dataset", token=token):
-        log(f"Repository already exists", "WARNING")
-        overwrite = input("Overwrite existing repo? (y/n, default=n): ").strip().lower()
-        if overwrite != 'y':
-            log("Upload cancelled.", "WARNING")
-            return None
-    else:
-        log(f"Repository does not exist. Creating new one.", "INFO")
-        try:
+    try:
+        if repo_exists(repo_id, repo_type="dataset", token=token):
+            log(f"Repository already exists", "WARNING")
+            overwrite = input("Overwrite existing repo? (y/n, default=n): ").strip().lower()
+            if overwrite != 'y':
+                log("Upload cancelled.", "WARNING")
+                return None
+        else:
+            log(f"Repository does not exist. Creating new one.", "INFO")
             create_repo(
                 repo_id=repo_id,
                 repo_type="dataset",
@@ -346,9 +338,9 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
             )
             log(f"Repository created successfully", "SUCCESS")
             time.sleep(2)
-        except Exception as e:
-            log(f"Failed to create repository: {str(e)}", "ERROR")
-            return None
+    except Exception as e:
+        log(f"Failed to check/create repository: {str(e)}", "ERROR")
+        return None
     
     # 写入 README.md
     readme_path = organized_dir / "README.md"
@@ -367,7 +359,6 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
         start_time = time.time()
         
         # 使用 upload_folder 上传
-        # 仅传递基本参数，优先使用默认值
         api.upload_folder(
             folder_path=str(organized_dir),
             repo_id=repo_id,
@@ -396,15 +387,13 @@ def main():
     print("Bulk Upload Version (Single Folder Upload)")
     print("="*70)
     
-    # 步骥 1: 获取 token
-    token = get_hf_token()
-    api = HfApi(token=token)
-    username = api.whoami()['name']
+    # 步骤 1: 获取 token
+    token, username = get_hf_token()
     
-    # 步骥 2: 获取 repo 名称
+    # 步骤 2: 获取 repo 名称
     repo_name = get_repo_name()
     
-    # 步骥 3: 组织数据並转换
+    # 步骤 3: 组织数据并转换
     data_dir = get_data_directory()
     organized_dir, file_count, total_rows, total_size = organize_files_by_symbol(data_dir)
     
@@ -414,10 +403,10 @@ def main():
     
     log(f"Conversion complete: {file_count} files, {total_size/(1024**2):.2f} MB", "SUCCESS")
     
-    # 步骥 4: 申生 README
+    # 步骤 4: 生成 README
     readme_content = create_readme(repo_name, file_count, total_rows, total_size)
     
-    # 步骥 5: 上传整个组织化目录
+    # 步骤 5: 上传整个组织化目录
     repo_id = upload_to_huggingface(token, username, repo_name, organized_dir, readme_content)
     
     if repo_id:
