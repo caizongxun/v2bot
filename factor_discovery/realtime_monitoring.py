@@ -61,89 +61,76 @@ print("\n" + "="*80)
 print("RISK METRICS")
 print("="*80)
 
-class RiskMetrics:
-    """
-    風險指標計算類
-    """
-    
-    @staticmethod
-    def calculate_metrics(signals, portfolio_scores):
-        """
-        計算完整的風險指標
-        """
-        # 轉換為 numpy 陣列
-        signals = np.asarray(signals, dtype=float)
-        portfolio_scores = np.asarray(portfolio_scores, dtype=float)
-        
-        # 計算信號變化
-        signal_changes = np.abs(np.diff(signals))
-        signal_frequency = np.sum(signal_changes) / len(signal_changes) if len(signal_changes) > 0 else 0
-        
-        # 計算分數波動
-        score_returns = np.diff(portfolio_scores)
-        score_volatility = np.std(score_returns)
-        score_trend = np.mean(score_returns[-20:]) if len(score_returns) >= 20 else 0
-        
-        # 計算連續信號長度
-        current_signal = signals[-1]
-        consecutive_bars = 1
-        for i in range(len(signals)-2, -1, -1):
-            if signals[i] == current_signal:
-                consecutive_bars += 1
-            else:
-                break
-        
-        # 計算信號持續性信心度（基於連續性）
-        signal_persistence_confidence = min(consecutive_bars / 5, 1.0)  # 最多5根bar
-        
-        # 計算分數強度（基於絕對值）
-        score_strength = abs(portfolio_scores[-1]) / (np.max(np.abs(portfolio_scores)) + 1e-10)
-        
-        # 總體信心度
-        overall_confidence = signal_persistence_confidence * 0.4 + score_strength * 0.6
-        
-        # 計算頭寸大小
-        position_size = overall_confidence  # 基於信心度的頭寸大小
-        
-        # 計算最大連續虧損
-        long_periods = np.where(signals == 1)[0]
-        short_periods = np.where(signals == 0)[0]
-        
-        max_drawdown_long = 0
-        max_drawdown_short = 0
-        
-        if len(long_periods) > 0:
-            long_returns = score_returns[long_periods[:-1]] if len(long_periods) > 1 else np.array([])
-            if len(long_returns) > 0:
-                cumsum = np.cumsum(long_returns)
-                running_max = np.maximum.accumulate(cumsum)
-                drawdown = (cumsum - running_max) / (np.abs(running_max) + 1e-10)
-                max_drawdown_long = np.min(drawdown) if len(drawdown) > 0 else 0
-        
-        if len(short_periods) > 0:
-            short_returns = score_returns[short_periods[:-1]] if len(short_periods) > 1 else np.array([])
-            if len(short_returns) > 0:
-                cumsum = np.cumsum(short_returns)
-                running_max = np.maximum.accumulate(cumsum)
-                drawdown = (cumsum - running_max) / (np.abs(running_max) + 1e-10)
-                max_drawdown_short = np.min(drawdown) if len(drawdown) > 0 else 0
-        
-        return {
-            'current_signal': 'LONG' if current_signal == 1 else 'FLAT',
-            'consecutive_bars': int(consecutive_bars),
-            'signal_frequency': float(signal_frequency),
-            'signal_persistence_confidence': float(signal_persistence_confidence),
-            'score_strength': float(score_strength),
-            'overall_confidence': float(overall_confidence),
-            'portfolio_score': float(portfolio_scores[-1]),
-            'score_volatility': float(score_volatility),
-            'score_trend_20b': float(score_trend),
-            'position_size': float(position_size),
-            'max_drawdown_long': float(max_drawdown_long),
-            'max_drawdown_short': float(max_drawdown_short),
-        }
+# 直接計算，不使用類
+signals = np.asarray(signals, dtype=float)
+portfolio_scores = np.asarray(portfolio_scores, dtype=float)
 
-metrics = RiskMetrics.calculate_metrics(signals, portfolio_scores)
+# 1. 計算信號變化
+signal_changes = np.abs(np.diff(signals))
+signal_frequency = np.sum(signal_changes) / len(signal_changes) if len(signal_changes) > 0 else 0
+
+# 2. 計算分數波動
+score_returns = np.diff(portfolio_scores)
+score_volatility = np.std(score_returns) if len(score_returns) > 0 else 0
+score_trend = np.mean(score_returns[-20:]) if len(score_returns) >= 20 else 0
+
+# 3. 計算連續信號長度
+current_signal = signals[-1]
+consecutive_bars = 1
+for i in range(len(signals)-2, -1, -1):
+    if signals[i] == current_signal:
+        consecutive_bars += 1
+    else:
+        break
+
+# 4. 計算信號持續性信心度
+pers_confidence = min(consecutive_bars / 5.0, 1.0)
+
+# 5. 計算分數強度
+score_strength = abs(portfolio_scores[-1]) / (np.max(np.abs(portfolio_scores)) + 1e-10)
+
+# 6. 總體信心度
+overall_confidence = pers_confidence * 0.4 + score_strength * 0.6
+
+# 7. 頭寸大小
+position_size = overall_confidence
+
+# 8. 計算最大連續虧損
+long_periods = np.where(signals == 1)[0]
+short_periods = np.where(signals == 0)[0]
+
+max_drawdown_long = 0
+max_drawdown_short = 0
+
+if len(long_periods) > 1:
+    long_returns = score_returns[long_periods[:-1]]
+    cumsum = np.cumsum(long_returns)
+    running_max = np.maximum.accumulate(cumsum)
+    drawdown = (cumsum - running_max) / (np.abs(running_max) + 1e-10)
+    max_drawdown_long = np.min(drawdown) if len(drawdown) > 0 else 0
+
+if len(short_periods) > 1:
+    short_returns = score_returns[short_periods[:-1]]
+    cumsum = np.cumsum(short_returns)
+    running_max = np.maximum.accumulate(cumsum)
+    drawdown = (cumsum - running_max) / (np.abs(running_max) + 1e-10)
+    max_drawdown_short = np.min(drawdown) if len(drawdown) > 0 else 0
+
+# 整理成 dict
+metrics = {
+    'current_signal': 'LONG' if current_signal == 1 else 'FLAT',
+    'consecutive_bars': int(consecutive_bars),
+    'signal_frequency': float(signal_frequency),
+    'signal_persistence_confidence': float(pers_confidence),
+    'score_strength': float(score_strength),
+    'overall_confidence': float(overall_confidence),
+    'portfolio_score': float(portfolio_scores[-1]),
+    'score_volatility': float(score_volatility),
+    'score_trend_20b': float(score_trend),
+    'position_size': float(position_size),
+    'max_drawdown_long': float(max_drawdown_long),
+    'max_drawdown_short': float(max_drawdown_short),
+}
 
 print(f"Current Signal:              {metrics['current_signal']}")
 print(f"Consecutive bars:           {metrics['consecutive_bars']} bars")
@@ -205,7 +192,7 @@ for i in range(min(5, len(signals)-1), 0, -1):
             'bars_ago': i,
             'from': signal_before,
             'to': signal_after,
-            'score_change': score_after - score_before
+            'score_change': float(score_after - score_before)
         })
 
 if len(last_changes) > 0:
