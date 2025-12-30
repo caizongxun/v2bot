@@ -62,7 +62,9 @@ print("RISK METRICS")
 print("="*80)
 
 class RiskMetrics:
-    """風險指標計算"""
+    """
+    風險指標計算類
+    """
     
     @staticmethod
     def calculate_metrics(signals, portfolio_scores):
@@ -91,11 +93,16 @@ class RiskMetrics:
             else:
                 break
         
-        # 計算信號確信度（基於連續性和分數強度）n        signal_confidence = min(consecutive_bars / 5, 1.0)  # 最多5根bar
-        score_strength = abs(portfolio_scores[-1]) / (np.max(np.abs(portfolio_scores)) + 1e-10)
-        overall_confidence = signal_confidence * 0.4 + score_strength * 0.6
+        # 計算信號持續性信心度（基於連續性）
+        signal_persistence_confidence = min(consecutive_bars / 5, 1.0)  # 最多5根bar
         
-        # 計算風險敞口
+        # 計算分數強度（基於絕對值）
+        score_strength = abs(portfolio_scores[-1]) / (np.max(np.abs(portfolio_scores)) + 1e-10)
+        
+        # 總體信心度
+        overall_confidence = signal_persistence_confidence * 0.4 + score_strength * 0.6
+        
+        # 計算頭寸大小
         position_size = overall_confidence  # 基於信心度的頭寸大小
         
         # 計算最大連續虧損
@@ -106,34 +113,34 @@ class RiskMetrics:
         max_drawdown_short = 0
         
         if len(long_periods) > 0:
-            long_returns = score_returns[long_periods[:-1]]
+            long_returns = score_returns[long_periods[:-1]] if len(long_periods) > 1 else np.array([])
             if len(long_returns) > 0:
                 cumsum = np.cumsum(long_returns)
                 running_max = np.maximum.accumulate(cumsum)
-                drawdown = (cumsum - running_max) / (running_max + 1e-10)
+                drawdown = (cumsum - running_max) / (np.abs(running_max) + 1e-10)
                 max_drawdown_long = np.min(drawdown) if len(drawdown) > 0 else 0
         
         if len(short_periods) > 0:
-            short_returns = score_returns[short_periods[:-1]]
+            short_returns = score_returns[short_periods[:-1]] if len(short_periods) > 1 else np.array([])
             if len(short_returns) > 0:
                 cumsum = np.cumsum(short_returns)
                 running_max = np.maximum.accumulate(cumsum)
-                drawdown = (cumsum - running_max) / (running_max + 1e-10)
+                drawdown = (cumsum - running_max) / (np.abs(running_max) + 1e-10)
                 max_drawdown_short = np.min(drawdown) if len(drawdown) > 0 else 0
         
         return {
             'current_signal': 'LONG' if current_signal == 1 else 'FLAT',
-            'consecutive_bars': consecutive_bars,
-            'signal_frequency': signal_frequency,
-            'signal_confidence': signal_confidence,
-            'score_strength': score_strength,
-            'overall_confidence': overall_confidence,
+            'consecutive_bars': int(consecutive_bars),
+            'signal_frequency': float(signal_frequency),
+            'signal_persistence_confidence': float(signal_persistence_confidence),
+            'score_strength': float(score_strength),
+            'overall_confidence': float(overall_confidence),
             'portfolio_score': float(portfolio_scores[-1]),
-            'score_volatility': score_volatility,
-            'score_trend_20b': score_trend,
-            'position_size': position_size,
-            'max_drawdown_long': max_drawdown_long,
-            'max_drawdown_short': max_drawdown_short,
+            'score_volatility': float(score_volatility),
+            'score_trend_20b': float(score_trend),
+            'position_size': float(position_size),
+            'max_drawdown_long': float(max_drawdown_long),
+            'max_drawdown_short': float(max_drawdown_short),
         }
 
 metrics = RiskMetrics.calculate_metrics(signals, portfolio_scores)
@@ -142,7 +149,7 @@ print(f"Current Signal:              {metrics['current_signal']}")
 print(f"Consecutive bars:           {metrics['consecutive_bars']} bars")
 print(f"Signal frequency:           {metrics['signal_frequency']:.4f} (changes per bar)")
 print(f"\nSignal Confidence:          {metrics['overall_confidence']:.2%}")
-print(f"  ├─ Signal persistence:    {metrics['signal_confidence']:.2%}")
+print(f"  ├─ Signal persistence:    {metrics['signal_persistence_confidence']:.2%}")
 print(f"  └─ Score strength:        {metrics['score_strength']:.2%}")
 print(f"\nPortfolio Analysis:")
 print(f"  ├─ Current score:         {metrics['portfolio_score']:7.4f}")
@@ -162,16 +169,19 @@ print("\n" + "="*80)
 print("FACTOR WEIGHTS & CONTRIBUTIONS")
 print("="*80)
 
-sorted_weights = sorted(best_weights.items(), key=lambda x: x[1], reverse=True)
+sorted_weights = sorted(best_weights.items(), key=lambda x: float(x[1]), reverse=True)
 print("\nOptimal factor weights:")
 cumulative = 0
 for i, (name, weight) in enumerate(sorted_weights, 1):
+    weight = float(weight)
     cumulative += weight
     bar_length = int(weight * 50)
     bar = '█' * bar_length
     print(f"  {i:2d}. {name:18s} {weight:7.4f} {weight*100:6.2f}% {bar}")
     if cumulative >= 0.95:
-        print(f"      ... {len(sorted_weights) - i} more factors (combined {1-cumulative:.2%})")
+        remaining_factors = len(sorted_weights) - i
+        if remaining_factors > 0:
+            print(f"      ... {remaining_factors} more factors (combined {1-cumulative:.2%})")
         break
 
 # ====================================================================
@@ -205,11 +215,11 @@ if len(last_changes) > 0:
 else:
     print("\nNo recent signal transitions.")
 
-# 預警條件
+# 警告條件
 print(f"\n[Risk Alerts]:")
 alerts = []
 
-if metrics['signal_confidence'] < 0.3:
+if metrics['overall_confidence'] < 0.3:
     alerts.append("⚠ Low signal confidence (< 30%)")
 
 if metrics['score_volatility'] > 1.0:
@@ -273,7 +283,7 @@ if metrics['current_signal'] == 'LONG':
     recommendation['action'] = '🟢 LONG'
     recommendation['description'] = 'Factor composite is bullish'
 else:
-    recommendation['action'] = '⚪ FLAT'
+    recommendation['action'] = '⚫ FLAT'
     recommendation['description'] = 'Reduce exposure or stay on sideline'
 
 recommendation['confidence'] = metrics['overall_confidence']
@@ -299,19 +309,19 @@ dashboard = {
     'timestamp': datetime.now().isoformat(),
     'current_signal': metrics['current_signal'],
     'metrics': {
-        'signal_confidence': float(metrics['overall_confidence']),
-        'portfolio_score': float(metrics['portfolio_score']),
-        'score_volatility': float(metrics['score_volatility']),
-        'signal_frequency': float(metrics['signal_frequency']),
-        'consecutive_bars': int(metrics['consecutive_bars']),
+        'signal_confidence': metrics['overall_confidence'],
+        'portfolio_score': metrics['portfolio_score'],
+        'score_volatility': metrics['score_volatility'],
+        'signal_frequency': metrics['signal_frequency'],
+        'consecutive_bars': metrics['consecutive_bars'],
     },
     'factor_weights': best_weights,
     'recommendation': {
         'action': recommendation['action'],
-        'confidence': float(recommendation['confidence']),
-        'position_size': float(recommendation['position_size']),
-        'stop_loss': float(recommendation['stop_loss']),
-        'take_profit': float(recommendation['take_profit']),
+        'confidence': recommendation['confidence'],
+        'position_size': recommendation['position_size'],
+        'stop_loss': recommendation['stop_loss'],
+        'take_profit': recommendation['take_profit'],
     },
     'alerts': alerts,
     'recent_performance': {
@@ -339,7 +349,10 @@ print(f"Confidence:                {metrics['overall_confidence']:.2%}")
 print(f"Position sizing:           {metrics['position_size']:.2%} of capital")
 print(f"Suggested action:          {recommendation['action']}")
 print(f"\nNext steps:")
-print(f"  1. Review alerts: {len(alerts)} active" if len(alerts) > 0 else f"  1. No alerts - system healthy")
+if len(alerts) > 0:
+    print(f"  1. Review alerts: {len(alerts)} active")
+else:
+    print(f"  1. No alerts - system healthy")
 print(f"  2. Monitor signal changes in real-time")
 print(f"  3. Adjust position size based on confidence")
 print(f"  4. Use suggested stop/take-profit levels")
