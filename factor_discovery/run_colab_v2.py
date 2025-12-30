@@ -60,7 +60,7 @@ try:
     
 except Exception as e:
     print(f"[DataLoader] ✗ Failed: {e}")
-    print("[DataLoader] 使用示例数据...")
+    print("[DataLoader] Using sample data...")
     
     np.random.seed(42)
     dates = pd.date_range('2023-01-01', periods=5000, freq='15min')
@@ -75,37 +75,32 @@ except Exception as e:
         'close': close_price,
         'volume': np.abs(np.random.randn(5000) * 100 + 500),
     })
-    print(f"[DataLoader] 示例數据 {len(df)} 条")
+    print(f"[DataLoader] Sample data {len(df)} records")
 
 # ====================================================================
-# STEP 2: 最简单的数据清洗
+# STEP 2: Minimal Data Cleaning
 # ====================================================================
 
-print("\n[STEP 2] 仃粗清洗数据...")
+print("\n[STEP 2] Clean data...")
 
-# 只需要OHLCV
- required_cols = ['open', 'high', 'low', 'close', 'volume']
+required_cols = ['open', 'high', 'low', 'close', 'volume']
 df = df[required_cols].copy()
-
-# 和帮收数据类简
- df = df.astype(float)
-
-# 排查成查的敲區遟：值値大于0
+df = df.astype(float)
 df = df[(df > 0).all(axis=1)]
 
-print(f"[DataCleaner] ✓ Cleaned {len(df)} records")
+print(f"[DataCleaner] ✓ {len(df)} records after cleaning")
 
 if len(df) < 100:
-    print(f"[ERROR] 數據不足100条，無法繼續購作")
+    print(f"[ERROR] Not enough data")
     raise ValueError("Insufficient data")
 
-print(f"[DataCleaner] Data range: close {df['close'].min():.0f} - {df['close'].max():.0f}")
+print(f"[DataCleaner] Price range: {df['close'].min():.0f} - {df['close'].max():.0f}")
 
 # ====================================================================
-# STEP 3: 技術指標計算
+# STEP 3: Technical Indicators
 # ====================================================================
 
-print("\n[STEP 3] 計算技術指標...")
+print("\n[STEP 3] Calculate technical indicators...")
 
 class Indicators:
     @staticmethod
@@ -141,25 +136,20 @@ class Indicators:
 ind = Indicators()
 
 factors = {
-    # 价格厚度
     'price_change': (df['close'] - df['open']) / (df['open'] + 1e-10),
     'high_low_ratio': (df['high'] - df['low']) / (df['close'] + 1e-10),
     
-    # 移动平均
     'SMA_5': ind.sma(df['close'].values, 5),
     'SMA_10': ind.sma(df['close'].values, 10),
     'SMA_20': ind.sma(df['close'].values, 20),
     'SMA_50': ind.sma(df['close'].values, 50),
     
-    # 动量指标
     'RSI_7': ind.rsi(df['close'].values, 7),
     'RSI_14': ind.rsi(df['close'].values, 14),
     'RSI_21': ind.rsi(df['close'].values, 21),
     
-    # MACD
     'MACD': ind.macd(df['close'].values, 12, 26, 9),
     
-    # 水靜对数指标
     'log_volume': np.log(df['volume'].values + 1),
     'volume_ratio': df['volume'].values / (df['volume'].rolling(20, min_periods=1).mean().values + 1e-10),
 }
@@ -167,10 +157,10 @@ factors = {
 print(f"[FactorGenerator] ✓ Generated {len(factors)} factors")
 
 # ====================================================================
-# STEP 4: 符号回归越作新因子
+# STEP 4: Symbolic Regression - Auto-discover factors
 # ====================================================================
 
-print("\n[STEP 4] 符号回归 - 自动辜現因子公式...")
+print("\n[STEP 4] Symbolic regression - discover factor formulas...")
 
 class Node:
     def __init__(self, op=None, left=None, right=None, var=None):
@@ -251,7 +241,7 @@ class SymReg:
             best_score = scores[best_idx]
             
             if gen % 10 == 0:
-                print(f"  Gen {gen:2d}: {best_score:8.4f}")
+                print(f"  Gen {gen:2d}: fitness = {best_score:8.4f}")
             
             if best_score > 0.15:
                 formula_str = str(pop[best_idx])
@@ -279,13 +269,13 @@ discovered_formulas = syreg.evolve()
 
 print(f"\n[SymReg] ✓ Discovered {len(discovered_formulas)} formulas:")
 for i, f in enumerate(discovered_formulas[:5], 1):
-    print(f"  Formula_{i}: {f[:50]}...")
+    print(f"  Formula_{i}: {str(f)[:50]}...")
 
 # ====================================================================
-# STEP 5: 分析因子
+# STEP 5: Analyze factor quality
 # ====================================================================
 
-print("\n[STEP 5] 分析因子质量...")
+print("\n[STEP 5] Analyze factor quality...")
 print("\n" + "="*80)
 print("FACTOR QUALITY SCORES")
 print("="*80)
@@ -313,10 +303,10 @@ for name, factor in factors.items():
     print(f"{name:18s} | Corr: {corr:7.4f} | Vol: {vol:8.6f} | Sharpe: {sharpe:8.4f}")
 
 # ====================================================================
-# STEP 6: 保存结果
+# STEP 6: Save results
 # ====================================================================
 
-print("\n[STEP 6] 保存结果...")
+print("\n[STEP 6] Save results...")
 
 with open('/tmp/btc_factors.pkl', 'wb') as f:
     pickle.dump(factors, f)
