@@ -1,11 +1,11 @@
 """
-Hugging Face 數據集上傳器 - 一次性上傳整個資料夾
+Hugging Face 数据集上传器 - 一次性上传整个资料夾
 
 功能:
-- 自動創建數據集 repo
-- CSV 轉換為 Parquet
-- 按幣種分類組織
-- 一次性上傳整個資料夾（減少 API 限制風險）
+- 自动创建数据集 repo
+- CSV 转换为 Parquet
+- 按币种分类组织
+- 一次性上传整个资料夾（減少 API 限制風險）
 
 使用方式:
 !pip install -q huggingface-hub pandas
@@ -16,11 +16,9 @@ exec(requests.get('https://raw.githubusercontent.com/caizongxun/v2bot/main/data_
 import os
 import sys
 import time
-import json
 import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
 
 try:
     from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo
@@ -47,12 +45,12 @@ def log(message, level="INFO"):
         print(f"{prefix} SUCCESS: {message}")
 
 def get_hf_token():
-    """獲取 Hugging Face token"""
+    """获取 Hugging Face token"""
     print("\n" + "="*70)
     print("STEP 1: HUGGING FACE TOKEN")
     print("="*70)
     
-    # 檢查是否已經設置
+    # 检查是否已经设置
     saved_token = HfFolder.get_token()
     if saved_token:
         print(f"Found saved token: {saved_token[:10]}...")
@@ -73,7 +71,7 @@ def get_hf_token():
         log("No token provided. Aborted.", "ERROR")
         sys.exit(1)
     
-    # 測試 token 有效性
+    # 测试 token 有效性
     try:
         api = HfApi(token=token)
         user_info = api.whoami()
@@ -85,7 +83,7 @@ def get_hf_token():
         sys.exit(1)
 
 def get_repo_name():
-    """獲取數據集名稱"""
+    """获取数据集名称"""
     print("\n" + "="*70)
     print("STEP 2: REPOSITORY NAME")
     print("="*70)
@@ -102,7 +100,7 @@ def get_repo_name():
     if not repo_name:
         repo_name = default_name
     
-    # 驗證名稱
+    # 验证名称
     if not repo_name.replace('-', '').replace('_', '').isalnum():
         log("Invalid repo name. Use only alphanumeric and hyphens.", "ERROR")
         sys.exit(1)
@@ -110,7 +108,7 @@ def get_repo_name():
     return repo_name.lower()
 
 def get_data_directory():
-    """獲取數據目錄"""
+    """获取数据目录"""
     print("\n" + "="*70)
     print("STEP 3: DATA DIRECTORY")
     print("="*70)
@@ -130,7 +128,7 @@ def get_data_directory():
         log(f"Directory not found: {data_path}", "ERROR")
         sys.exit(1)
     
-    # 檢查 CSV 文件
+    # 检查 CSV 文件
     csv_files = list(data_path.glob('*.csv'))
     if not csv_files:
         log(f"No CSV files found in {data_path}", "ERROR")
@@ -141,10 +139,9 @@ def get_data_directory():
 
 def parse_symbol_and_interval(filename):
     """
-    從檔名解析幣種和時間框架
+    介文件名分析币种和时间框架
     例: BTC_15m.csv -> (BTC, BTCUSDT, 15m)
     """
-    # 幣種映射表
     SYMBOL_MAP = {
         'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT', 'SOL': 'SOLUSDT',
         'XRP': 'XRPUSDT', 'ADA': 'ADAUSDT', 'AVAX': 'AVAXUSDT', 'DOT': 'DOTUSDT',
@@ -171,16 +168,8 @@ def parse_symbol_and_interval(filename):
 
 def organize_files_by_symbol(data_dir):
     """
-    掃描 CSV 文件，轉換為 Parquet，並按幣種組織成一個結構化目錄
-    建立以下結構:
-    organized_data/
-    ├── README.md
-    └── klines/
-        ├── BTCUSDT/
-        │   ├── BTC_15m.parquet
-        │   └── BTC_1h.parquet
-        ├── ETHUSDT/
-        └── ...
+    扫描 CSV 文件，转换为 Parquet，按币种组织
+    返回组织后的目录路径
     """
     print("\n" + "="*70)
     print("STEP 3B: ORGANIZE AND CONVERT FILES")
@@ -188,7 +177,7 @@ def organize_files_by_symbol(data_dir):
     
     data_path = Path(data_dir)
     
-    # 創建組織化目錄
+    # 创建组织化目录
     organized_dir = data_path / "organized_data"
     if organized_dir.exists():
         log(f"Removing existing organized data directory", "INFO")
@@ -199,9 +188,9 @@ def organize_files_by_symbol(data_dir):
     klines_dir.mkdir(parents=True, exist_ok=True)
     
     csv_files = sorted(data_path.glob('*.csv'))
-    organized_files = {}
     total_rows = 0
     total_size = 0
+    file_count = 0
     
     print(f"\nConverting and organizing {len(csv_files)} CSV files...")
     
@@ -213,10 +202,10 @@ def organize_files_by_symbol(data_dir):
             continue
         
         try:
-            # 讀取 CSV
+            # 读取 CSV
             df = pd.read_csv(csv_file)
             
-            # 轉換數據類型
+            # 转换数据类型
             numeric_cols = ['open', 'high', 'low', 'close', 'volume',
                           'quote_volume', 'taker_buy_base', 'taker_buy_quote']
             for col in numeric_cols:
@@ -226,23 +215,20 @@ def organize_files_by_symbol(data_dir):
             if 'trades' in df.columns:
                 df['trades'] = pd.to_numeric(df['trades'], errors='coerce')
             
-            # 建立幣種目錄
+            # 创建币种目录
             symbol_dir = klines_dir / symbol_full
             symbol_dir.mkdir(parents=True, exist_ok=True)
             
-            # 保存為 Parquet
+            # 保存为 Parquet
             parquet_filename = csv_file.stem + ".parquet"
             parquet_path = symbol_dir / parquet_filename
             
             df.to_parquet(parquet_path, compression='snappy', index=False)
             
-            if symbol_full not in organized_files:
-                organized_files[symbol_full] = []
-            organized_files[symbol_full].append(parquet_path)
-            
             size_mb = parquet_path.stat().st_size / (1024 * 1024)
             total_rows += len(df)
             total_size += parquet_path.stat().st_size
+            file_count += 1
             
             log(f"{symbol_short:5} {interval:3} -> klines/{symbol_full}/{parquet_filename:30} ({len(df):7,} rows, {size_mb:6.1f} MB)", "INFO")
             
@@ -250,54 +236,13 @@ def organize_files_by_symbol(data_dir):
             log(f"Failed to convert {csv_file.name}: {str(e)}", "ERROR")
             continue
     
-    return organized_dir, organized_files, total_rows, total_size
+    return organized_dir, file_count, total_rows, total_size
 
-def create_readme(repo_name, organized_files, total_rows, total_size):
-    """產生 README.md"""
-    
-    symbols = sorted(organized_files.keys())
-    all_intervals = set()
-    for files in organized_files.values():
-        for f in files:
-            if '15m' in f.name:
-                all_intervals.add('15m')
-            elif '1h' in f.name:
-                all_intervals.add('1h')
-    
-    total_files = sum(len(v) for v in organized_files.values())
+def create_readme(repo_name, file_count, total_rows, total_size):
+    """申生 README.md"""
     
     readme_content = f"""---
 license: mit
-dataset_info:
-  features:
-  - name: open_time
-    dtype: int64
-  - name: open
-    dtype: float64
-  - name: high
-    dtype: float64
-  - name: low
-    dtype: float64
-  - name: close
-    dtype: float64
-  - name: volume
-    dtype: float64
-  - name: quote_volume
-    dtype: float64
-  - name: trades
-    dtype: int64
-  - name: taker_buy_base
-    dtype: float64
-  - name: taker_buy_quote
-    dtype: float64
-  - name: close_time
-    dtype: int64
-  splits:
-  - name: train
-    num_bytes: {int(total_size)}
-    num_examples: {total_rows}
-  download_size: {int(total_size)}
-  dataset_size: {int(total_size)}
 ---
 
 # {repo_name}
@@ -308,12 +253,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## Dataset Info
 
-- Total Files: {total_files}
+- Total Files: {file_count}
 - Total Data Points: {total_rows:,}
 - Total Size: {total_size / (1024**2):.2f} MB
-- Symbols: {len(symbols)} cryptocurrencies
-- Timeframes: {', '.join(sorted(all_intervals))}
 - Data Source: Binance REST API
+- Time period: ~2-3 years of historical data
 
 ## Directory Structure
 
@@ -325,36 +269,14 @@ klines/
 ├── AAVEUSDT/
 │   ├── AAVE_15m.parquet
 │   └── AAVE_1h.parquet
-├── ALGOUSDT/
-├── ARBUSDT/
-├── ATOMUSDT/
-├── AVAXUSDT/
-├── BCHUSDT/
-├── BNBUSDT/
-├── BTCUSDT/
-├── DOGEUSDT/
-├── DOTUSDT/
-├── ETCUSDT/
-├── ETHUSDT/
-├── FILUSDT/
-├── LINKUSDT/
-├── LTCUSDT/
-├── MATICUSDT/
-├── NEARUSDT/
-├── OPUSDT/
-├── SHIBUSD/
-├── SOLUSDT/
-├── UNIUSDT/
-└── XRPUSDT/
+├── ... (23 total symbols)
 ```
 
 ## Symbols Included
 
-{', '.join(symbols)}
+ADA, AAVE, ALGO, ARB, ATOM, AVAX, BCH, BNB, BTC, DOGE, DOT, ETC, ETH, FIL, LINK, LTC, MATIC, NEAR, OP, SHIB, SOL, UNI, XRP
 
 ## Usage
-
-### Load Specific Symbol
 
 ```python
 import pandas as pd
@@ -362,65 +284,38 @@ from huggingface_hub import hf_hub_download
 
 # Download BTC 15m data
 path = hf_hub_download(
-    "{{USERNAME}}/{repo_name}",
+    "zongowo111/{repo_name}",
     "klines/BTCUSDT/BTC_15m.parquet",
     repo_type="dataset"
 )
 df = pd.read_parquet(path)
-print(f"Loaded {{len(df)}} BTC K-lines")
-```
-
-### Load Multiple Symbols
-
-```python
-import pandas as pd
-from huggingface_hub import hf_hub_download
-
-symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
-interval = '15m'
-
-data = {{}}
-for symbol in symbols:
-    short_name = symbol.replace('USDT', '').replace('USD', '')
-    path = hf_hub_download(
-        "{{USERNAME}}/{repo_name}",
-        f"klines/{{symbol}}/{{short_name}}_{{interval}}.parquet",
-        repo_type="dataset"
-    )
-    data[symbol] = pd.read_parquet(path)
-    print(f"{{symbol}}: {{len(data[symbol])}} K-lines")
+print(df.head())
 ```
 
 ## Data Columns
 
-Each file contains:
 - `open_time` - Candle open time (Unix timestamp)
 - `open` - Opening price
-- `high` - Highest price in candle
-- `low` - Lowest price in candle
+- `high` - Highest price
+- `low` - Lowest price
 - `close` - Closing price
-- `volume` - Trading volume in base currency
-- `quote_volume` - Volume in quote currency
+- `volume` - Trading volume
+- `quote_volume` - Quote volume
 - `trades` - Number of trades
-- `taker_buy_base` - Taker buy base asset volume
-- `taker_buy_quote` - Taker buy quote asset volume
+- `taker_buy_base` - Taker buy base volume
+- `taker_buy_quote` - Taker buy quote volume
 - `close_time` - Candle close time (Unix timestamp)
 
 ## License
 
-MIT License
-
-## Disclaimer
-
-For research purposes only. Not financial advice.
+MIT License - Free for research and educational purposes.
 """
     
     return readme_content
 
 def upload_to_huggingface(token, username, repo_name, organized_dir, readme_content):
     """
-    一次性上傳整個組織化目錄到 HuggingFace
-    使用正確的 upload_folder API
+    一次性上传整个组织化目录到 HuggingFace
     """
     print("\n" + "="*70)
     print("STEP 4: UPLOAD TO HUGGINGFACE")
@@ -430,10 +325,9 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
     repo_id = f"{username}/{repo_name}"
     
     print(f"\nRepository ID: {repo_id}")
-    print(f"Upload method: Single folder upload")
     print(f"Source directory: {organized_dir}")
     
-    # 檢查 repo 是否存在
+    # 检查 repo 是否存在
     print(f"\nChecking if repo exists...")
     if repo_exists(repo_id, repo_type="dataset", token=token):
         log(f"Repository already exists", "WARNING")
@@ -456,34 +350,29 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
             log(f"Failed to create repository: {str(e)}", "ERROR")
             return None
     
-    # 寫入 README.md 到組織化目錄
+    # 写入 README.md
     readme_path = organized_dir / "README.md"
     with open(readme_path, 'w', encoding='utf-8') as f:
         f.write(readme_content)
     log(f"README.md created", "SUCCESS")
     
-    # 一次性上傳整個目錄
+    # 上传整个目录
     print(f"\n" + "-"*70)
     print(f"Uploading entire dataset folder...")
-    print(f"This may take 30-90 minutes depending on your connection.")
-    print(f"You can monitor progress at: https://huggingface.co/datasets/{repo_id}")
-    print("-"*70)
+    print(f"This may take 30-90 minutes.")
+    print(f"Monitor at: https://huggingface.co/datasets/{repo_id}")
+    print("-"*70 + "\n")
     
     try:
         start_time = time.time()
         
-        # 使用 upload_folder 一次性上傳整個組織化目錄
+        # 使用 upload_folder 上传
+        # 仅传递基本参数，优先使用默认值
         api.upload_folder(
             folder_path=str(organized_dir),
             repo_id=repo_id,
             repo_type="dataset",
-            commit_message="Initial dataset upload - Crypto OHLCV data from Binance",
-            ignore_patterns=[
-                "*.csv",  # 忽略原始 CSV
-                "*.pyc",
-                "__pycache__",
-                ".git*",
-            ]
+            commit_message="Upload cryptocurrency OHLCV data - organized by symbol"
         )
         
         elapsed = time.time() - start_time
@@ -493,39 +382,42 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
     except Exception as e:
         log(f"Upload failed: {str(e)}", "ERROR")
         print(f"\nFull error: {type(e).__name__}: {e}")
+        print(f"\nTips:")
+        print(f"1. Check your internet connection")
+        print(f"2. Ensure HF token has 'Write' permission")
+        print(f"3. Try running the script again")
         return None
 
 def main():
-    """主執行函數"""
+    """主执行函数"""
     
     print("\n" + "="*70)
     print("HUGGING FACE DATASET UPLOADER")
     print("Bulk Upload Version (Single Folder Upload)")
     print("="*70)
     
-    # 步驟 1: 獲取 token
+    # 步骥 1: 获取 token
     token = get_hf_token()
     api = HfApi(token=token)
     username = api.whoami()['name']
     
-    # 步驟 2: 獲取 repo 名稱
+    # 步骥 2: 获取 repo 名称
     repo_name = get_repo_name()
     
-    # 步驟 3: 組織數據並轉換
+    # 步骥 3: 组织数据並转换
     data_dir = get_data_directory()
-    organized_dir, organized_files, total_rows, total_size = organize_files_by_symbol(data_dir)
+    organized_dir, file_count, total_rows, total_size = organize_files_by_symbol(data_dir)
     
-    if not organized_files:
+    if file_count == 0:
         log("No files to upload. Aborted.", "ERROR")
         return
     
-    total_files = sum(len(v) for v in organized_files.values())
-    log(f"Conversion complete: {len(organized_files)} symbols, {total_files} files, {total_size/(1024**2):.2f} MB", "SUCCESS")
+    log(f"Conversion complete: {file_count} files, {total_size/(1024**2):.2f} MB", "SUCCESS")
     
-    # 步驟 4: 產生 README
-    readme_content = create_readme(repo_name, organized_files, total_rows, total_size)
+    # 步骥 4: 申生 README
+    readme_content = create_readme(repo_name, file_count, total_rows, total_size)
     
-    # 步驟 5: 上傳整個組織化目錄
+    # 步骥 5: 上传整个组织化目录
     repo_id = upload_to_huggingface(token, username, repo_name, organized_dir, readme_content)
     
     if repo_id:
@@ -535,8 +427,6 @@ def main():
         print(f"\nDataset successfully uploaded!")
         print(f"\nDataset URL:")
         print(f"https://huggingface.co/datasets/{repo_id}")
-        print(f"\nDirectory structure:")
-        print(f"https://huggingface.co/datasets/{repo_id}/tree/main/klines")
         print(f"\nLoad dataset with:")
         print(f"import pandas as pd")
         print(f"from huggingface_hub import hf_hub_download")
