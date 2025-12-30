@@ -58,10 +58,17 @@ print("="*80)
 class SingleFactorBacktest:
     """單因子策略回測"""
     
-    def __init__(self, factor, returns, threshold=0.5):
+    def __init__(self, factor, prices, threshold=0.5):
         self.factor = np.asarray(factor, dtype=float)
         self.factor = np.nan_to_num(self.factor, 0)
-        self.returns = np.asarray(returns, dtype=float)
+        self.prices = np.asarray(prices, dtype=float)
+        
+        # 確保長度一致
+        min_len = min(len(self.factor), len(self.prices) - 1)
+        self.factor = self.factor[:min_len]
+        self.prices = self.prices[:min_len+1]
+        
+        self.returns = np.diff(np.log(self.prices))
         self.threshold = threshold
     
     def backtest(self):
@@ -73,14 +80,14 @@ class SingleFactorBacktest:
         signals = np.where(factor_norm > self.threshold, 1, -1)
         
         # 計算策略收益
-        strategy_returns = signals[:-1] * self.returns[1:]
+        strategy_returns = signals * self.returns
         
         # 統計指標
         total_return = np.sum(strategy_returns)
-        annual_return = total_return * 252 / len(strategy_returns)
+        annual_return = total_return * 252 / len(strategy_returns) if len(strategy_returns) > 0 else 0
         sharpe = np.mean(strategy_returns) / (np.std(strategy_returns) + 1e-10) * np.sqrt(252)
         max_dd = self._max_drawdown(strategy_returns)
-        win_rate = np.sum(strategy_returns > 0) / len(strategy_returns)
+        win_rate = np.sum(strategy_returns > 0) / len(strategy_returns) if len(strategy_returns) > 0 else 0
         
         return {
             'total_return': total_return,
@@ -94,22 +101,30 @@ class SingleFactorBacktest:
     def _max_drawdown(returns):
         """最大回撤"""
         cumsum = np.cumsum(returns)
+        if len(cumsum) == 0:
+            return 0
         running_max = np.maximum.accumulate(cumsum)
         drawdown = (cumsum - running_max) / (running_max + 1e-10)
         return np.min(drawdown)
 
-# 計算收益率
-factors_df = pd.DataFrame(factors)
-prices = factors_df['close'].values if 'close' in factors_df.columns else factors_df.iloc[:, 0].values
-returns = np.diff(np.log(prices))
+# 取一個可代表价格的因子
+if 'close' in factors:
+    prices = factors['close']
+elif 'SMA_5' in factors:
+    prices = factors['SMA_5']
+else:
+    prices = list(factors.values())[0]
 
 backtest_results = {}
 for name, factor in factors.items():
-    bt = SingleFactorBacktest(factor, returns)
-    result = bt.backtest()
-    backtest_results[name] = result
-    
-    print(f"{name:18s} | Return: {result['annual_return']:7.4f} | Sharpe: {result['sharpe']:7.4f} | MaxDD: {result['max_dd']:7.4f} | WinRate: {result['win_rate']:.2%}")
+    try:
+        bt = SingleFactorBacktest(factor, prices)
+        result = bt.backtest()
+        backtest_results[name] = result
+        
+        print(f"{name:18s} | Return: {result['annual_return']:7.4f} | Sharpe: {result['sharpe']:7.4f} | MaxDD: {result['max_dd']:7.4f} | WinRate: {result['win_rate']:.2%}")
+    except Exception as e:
+        print(f"{name:18s} | Error: {str(e)[:30]}")
 
 # ====================================================================
 # PART 3: 多因子組合優化（遺傳算法）
@@ -120,9 +135,10 @@ print("\n[STEP 3] Multi-factor optimization using genetic algorithm...")
 class GeneticOptimizer:
     """遺傳算法優化"""
     
-    def __init__(self, factors_dict, returns, pop_size=50, generations=30):
+    def __init__(self, factors_dict, prices, pop_size=50, generations=30):
         self.factors_dict = factors_dict
-        self.returns = returns
+        self.prices = np.asarray(prices, dtype=float)
+        self.returns = np.diff(np.log(self.prices))
         self.pop_size = pop_size
         self.generations = generations
         self.factor_names = list(factors_dict.keys())
@@ -136,9 +152,10 @@ class GeneticOptimizer:
         """計算適應度（Sharpe比）"""
         try:
             # 組合因子
-            portfolio = np.zeros(len(self.returns))
+            portfolio = np.zeros(min(len(self.returns), min([len(self.factors_dict[n]) for n in self.factor_names])))
+            
             for i, name in enumerate(self.factor_names):
-                factor = np.asarray(self.factors_dict[name], dtype=float)
+                factor = np.asarray(self.factors_dict[name], dtype=float)[:len(portfolio)]
                 factor = np.nan_to_num(factor, 0)
                 factor_norm = (factor - np.mean(factor)) / (np.std(factor) + 1e-10)
                 portfolio += weights[i] * factor_norm
@@ -147,10 +164,10 @@ class GeneticOptimizer:
             portfolio = (portfolio - np.mean(portfolio)) / (np.std(portfolio) + 1e-10)
             
             # 生成信號
-            signals = np.where(portfolio[:-1] > 0, 1, -1)
+            signals = np.where(portfolio > 0, 1, -1)
             
             # 計算收益
-            strategy_returns = signals * self.returns[1:]
+            strategy_returns = signals * self.returns[:len(signals)]
             sharpe = np.mean(strategy_returns) / (np.std(strategy_returns) + 1e-10) * np.sqrt(252)
             
             return sharpe
@@ -203,7 +220,7 @@ class GeneticOptimizer:
         best_idx = np.argmax(final_scores)
         return population[best_idx], max(final_scores)
 
-optimizer = GeneticOptimizer(factors, returns, pop_size=50, generations=30)
+optimizer = GeneticOptimizer(factors, prices, pop_size=50, generations=30)
 best_weights, best_sharpe = optimizer.optimize()
 
 print(f"\n[GeneticOptimizer] ✓ Optimization complete")
@@ -220,9 +237,11 @@ for i, (name, weight) in enumerate(zip(optimizer.factor_names, best_weights)):
 print("\n[STEP 4] Generate trading signals...")
 
 # 用最優權重組合因子
-portfolio = np.zeros(len(returns))
+min_len = min(len(optimizer.returns), min([len(factors[n]) for n in optimizer.factor_names]))
+portfolio = np.zeros(min_len)
+
 for i, name in enumerate(optimizer.factor_names):
-    factor = np.asarray(factors[name], dtype=float)
+    factor = np.asarray(factors[name], dtype=float)[:min_len]
     factor = np.nan_to_num(factor, 0)
     factor_norm = (factor - np.mean(factor)) / (np.std(factor) + 1e-10)
     portfolio += best_weights[i] * factor_norm
@@ -239,6 +258,7 @@ for i in range(max(0, len(signals)-20), len(signals)):
     print(f"  Bar {i:6d}: {signals[i]} | Portfolio score: {portfolio[i]:7.4f}")
 
 print(f"\n[Signal Generator] Current signal: {'LONG' if signals[-1] == 1 else 'FLAT'}")
+print(f"[Signal Generator] Current portfolio score: {portfolio[-1]:7.4f}")
 
 # ====================================================================
 # PART 5: 保存結果
@@ -267,8 +287,9 @@ print("\n" + "="*80)
 print("OPTIMIZATION SUMMARY")
 print("="*80)
 print(f"Total factors analyzed:     {len(factors):4d}")
-print(f"Optimal portfolio Sharpe:   {best_sharpe:7.4f}")
-print(f"Best single factor Sharpe:  {max([r['sharpe'] for r in backtest_results.values()]):7.4f}")
+if len(backtest_results) > 0:
+    print(f"Best single factor Sharpe:  {max([r['sharpe'] for r in backtest_results.values()]):7.4f}")
+print(f"Optimal portfolio Sharpe:    {best_sharpe:7.4f}")
 print(f"\nCurrent trading signal: {'LONG' if signals[-1] == 1 else 'FLAT'}")
 print(f"Portfolio score: {portfolio[-1]:7.4f}")
 print("="*80 + "\n")
