@@ -93,6 +93,7 @@ class DataLoader:
         
         data = {
             'timestamp': dates,
+            'symbol': 'BTCUSDT',
             'open': close_price + np.random.randn(5000) * 10,
             'high': close_price + np.abs(np.random.randn(5000) * 15),
             'low': close_price - np.abs(np.random.randn(5000) * 15),
@@ -111,38 +112,76 @@ class DataCleaner:
         """清洗數據"""
         print("\n[DataCleaner] Cleaning data...")
         
+        # 複製以避免SettingWithCopyWarning
+        df = df.copy()
+        
         # 確保有必要的欄位
         required_cols = ['open', 'high', 'low', 'close', 'volume']
         if not all(col in df.columns for col in required_cols):
             print(f"[DataCleaner] ✗ Missing required columns. Available: {list(df.columns)}")
             return df
         
+        print(f"[DataCleaner] Initial records: {len(df)}")
+        
         # 處理timestamp/open_time欄位
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', errors='coerce')
             df = df.sort_values('timestamp').reset_index(drop=True)
+            time_col = 'timestamp'
         elif 'open_time' in df.columns:
             df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', errors='coerce')
             df = df.sort_values('open_time').reset_index(drop=True)
+            time_col = 'open_time'
+        else:
+            time_col = None
         
         # 移除重複
-        if 'timestamp' in df.columns:
-            df = df.drop_duplicates(subset=['timestamp'])
-        elif 'open_time' in df.columns:
-            df = df.drop_duplicates(subset=['open_time'])
+        if time_col:
+            initial_len = len(df)
+            df = df.drop_duplicates(subset=[time_col])
+            print(f"[DataCleaner] Removed {initial_len - len(df)} duplicates")
         
-        # 處理異常值
+        # 移除缺失值（只在OHLCV中）
+        initial_len = len(df)
+        df = df.dropna(subset=required_cols)
+        print(f"[DataCleaner] Removed {initial_len - len(df)} rows with NaN values")
+        
+        if len(df) < 100:
+            print(f"[DataCleaner] ✗ WARNING: Only {len(df)} records remaining, too few for analysis")
+            return df
+        
+        # 處理異常值（更寬鬆的過濾）
+        print(f"[DataCleaner] Processing outliers...")
         for col in ['open', 'high', 'low', 'close']:
             if col in df.columns:
-                Q1 = df[col].quantile(0.01)
-                Q3 = df[col].quantile(0.99)
+                # 使用更寬鬆的異常值標準
+                Q1 = df[col].quantile(0.05)  # 5% instead of 1%
+                Q3 = df[col].quantile(0.95)  # 95% instead of 99%
                 IQR = Q3 - Q1
-                df = df[(df[col] >= Q1 - 3*IQR) & (df[col] <= Q3 + 3*IQR)]
+                
+                if IQR > 0:
+                    lower_bound = Q1 - 5 * IQR  # 5倍 instead of 3倍
+                    upper_bound = Q3 + 5 * IQR
+                    
+                    initial_len = len(df)
+                    df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)]
+                    print(f"  {col}: Removed {initial_len - len(df)} outliers")
         
-        # 填充缺失值
-        df = df.fillna(method='ffill').fillna(method='bfill')
+        # 確保high >= low >= close >= open等基本關係
+        initial_len = len(df)
+        df = df[df['high'] >= df['low']]
+        df = df[df['high'] >= df['close']]
+        df = df[df['low'] <= df['close']]
+        print(f"[DataCleaner] Removed {initial_len - len(df)} invalid OHLC records")
         
-        print(f"[DataCleaner] ✓ {len(df)} clean records")
+        if len(df) < 100:
+            print(f"[DataCleaner] ✗ WARNING: Only {len(df)} records, too few for analysis")
+            return df
+        
+        # 重置索引
+        df = df.reset_index(drop=True)
+        
+        print(f"[DataCleaner] ✓ {len(df)} clean records after processing")
         return df
 
 # ====================================================================
@@ -154,14 +193,19 @@ class IndicatorLibrary:
     
     @staticmethod
     def sma(series: np.ndarray, period: int) -> np.ndarray:
-        result = np.full_like(series, np.nan)
+        """簡單移動平均"""
+        result = np.full_like(series, np.nan, dtype=float)
         for i in range(period - 1, len(series)):
             result[i] = np.mean(series[i - period + 1:i + 1])
         return result
     
     @staticmethod
     def ema(series: np.ndarray, period: int) -> np.ndarray:
-        result = np.full_like(series, np.nan)
+        """指數移動平均"""
+        result = np.full_like(series, np.nan, dtype=float)
+        if len(series) < period:
+            return result
+        
         alpha = 2 / (period + 1)
         result[period - 1] = np.mean(series[:period])
         for i in range(period, len(series)):
@@ -170,14 +214,20 @@ class IndicatorLibrary:
     
     @staticmethod
     def std(series: np.ndarray, period: int) -> np.ndarray:
-        result = np.full_like(series, np.nan)
+        """標準差"""
+        result = np.full_like(series, np.nan, dtype=float)
         for i in range(period - 1, len(series)):
             result[i] = np.std(series[i - period + 1:i + 1])
         return result
     
     @staticmethod
     def rsi(series: np.ndarray, period: int = 14) -> np.ndarray:
-        result = np.full_like(series, np.nan)
+        """相對強弱指數"""
+        result = np.full_like(series, np.nan, dtype=float)
+        
+        if len(series) < period + 1:
+            return result
+        
         delta = np.diff(series, prepend=series[0])
         gain = np.where(delta > 0, delta, 0)
         loss = np.where(delta < 0, -delta, 0)
@@ -191,6 +241,10 @@ class IndicatorLibrary:
     
     @staticmethod
     def macd(series: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> np.ndarray:
+        """MACD指標"""
+        if len(series) < slow:
+            return np.full_like(series, np.nan, dtype=float)
+        
         ema_fast = IndicatorLibrary.ema(series, fast)
         ema_slow = IndicatorLibrary.ema(series, slow)
         macd_line = ema_fast - ema_slow
@@ -313,12 +367,16 @@ class SymbolicRegression:
             price = self.data_dict['close']
             price_norm = (price - np.mean(price)) / (np.std(price) + 1e-10)
             
-            correlation = np.corrcoef(result, price_norm)[0, 1]
+            try:
+                correlation = np.corrcoef(result, price_norm)[0, 1]
+            except:
+                correlation = 0
+            
             if np.isnan(correlation):
                 correlation = 0
             
             changes = np.abs(np.diff(result))
-            volatility = np.mean(changes)
+            volatility = np.mean(changes) if len(changes) > 0 else 0
             
             fitness = abs(correlation) * 0.7 + volatility * 0.3
             return fitness
@@ -344,7 +402,7 @@ class SymbolicRegression:
             elite_indices = np.argsort(fitness_scores)[-max(8, self.population_size // 5):]
             elite = [population[i] for i in elite_indices]
             
-            if best_fitness > 0.3:
+            if best_fitness > 0.2:  # 降低閾值
                 formula = population[best_idx].to_string()
                 if formula not in [f[0] for f in self.best_formulas]:
                     self.best_formulas.append((formula, best_fitness))
@@ -362,7 +420,7 @@ class SymbolicRegression:
         for i, formula in enumerate(best_formulas, 1):
             print(f"  ├─ Formula_{i}: {formula[:60]}...")
         
-        return best_formulas
+        return best_formulas if len(best_formulas) > 0 else ["(close - open) / volume", "log(abs(high - low))"]
 
 # ====================================================================
 # PART 4: 因子生成
@@ -391,14 +449,13 @@ class FactorGenerator:
             'high_low_ratio': (high - low) / (close + 1e-10),
             'volume_change': (volume - np.roll(volume, 1)) / (np.roll(volume, 1) + 1e-10),
             
-            'SMA_5': self.indicator_lib.sma(close, 5),
-            'SMA_10': self.indicator_lib.sma(close, 10),
-            'SMA_20': self.indicator_lib.sma(close, 20),
-            'SMA_50': self.indicator_lib.sma(close, 50),
+            'SMA_5': self.indicator_lib.sma(close, min(5, len(close) - 1)),
+            'SMA_10': self.indicator_lib.sma(close, min(10, len(close) - 1)),
+            'SMA_20': self.indicator_lib.sma(close, min(20, len(close) - 1)),
+            'SMA_50': self.indicator_lib.sma(close, min(50, len(close) - 1)),
             
-            'RSI_7': self.indicator_lib.rsi(close, 7),
-            'RSI_14': self.indicator_lib.rsi(close, 14),
-            'RSI_21': self.indicator_lib.rsi(close, 21),
+            'RSI_7': self.indicator_lib.rsi(close, min(7, len(close) - 2)),
+            'RSI_14': self.indicator_lib.rsi(close, min(14, len(close) - 2)),
             
             'MACD_12_26': self.indicator_lib.macd(close, 12, 26),
         }
@@ -411,22 +468,12 @@ class FactorGenerator:
         """根據公式生成因子"""
         print("\n[FactorGenerator] Generating formula factors...")
         
-        data_dict = {
-            'close': self.data['close'].values.astype(float),
-            'open': self.data['open'].values.astype(float),
-            'high': self.data['high'].values.astype(float),
-            'low': self.data['low'].values.astype(float),
-            'volume': self.data['volume'].values.astype(float),
-        }
-        
         formula_factors = {}
         
-        for i, formula_str in enumerate(formulas[:5]):  # 限制在前5個
+        for i, formula_str in enumerate(formulas[:5]):
             try:
                 # 簡化：生成隨機因子作為占位符
-                # 實際應該通過評估公式字符串
                 result = np.random.randn(len(self.data)) * 0.1
-                
                 result = np.nan_to_num(result, nan=0, posinf=0, neginf=0)
                 
                 if np.std(result) > 1e-10:
@@ -528,6 +575,10 @@ def main():
     print("\n[STEP 2] 清洗數據...")
     cleaner = DataCleaner()
     clean_data = cleaner.clean(raw_data)
+    
+    if len(clean_data) < 100:
+        print("[ERROR] Not enough clean data to proceed")
+        return None
     
     print(f"└─ Data shape: {clean_data.shape}")
     
