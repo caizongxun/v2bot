@@ -1,7 +1,11 @@
 """
-Hugging Face 數據集上傳器 - 自動創建 Repo 版 (按幣種分類)
+Hugging Face 數據集上傳器 - 自動創建 Repo 版 (按幣種分類 + API 保護)
 
-自動創建數據集 repo 並按幣種分類上傳數據
+功能:
+- 自動創建數據集 repo
+- 按幣種分類上傳數據
+- 內置 API 限制保護 (重試、速率控制、超時)
+- 自動故障恢復
 
 使用方式:
 !pip install -q huggingface-hub pandas
@@ -15,6 +19,7 @@ import time
 import json
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Tuple, Optional
 
 try:
     from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo, CommitOperationAdd
@@ -26,6 +31,71 @@ except ImportError:
     from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo, CommitOperationAdd
     import pandas as pd
     print("Packages installed successfully\n")
+
+# API 限制配置
+class RateLimitConfig:
+    """API 速率限制配置"""
+    MAX_RETRIES = 3  # 最大重試次數
+    INITIAL_BACKOFF = 2  # 初始退避時間(秒)
+    MAX_BACKOFF = 60  # 最大退避時間(秒)
+    REQUEST_TIMEOUT = 300  # 請求超時時間(秒)
+    DELAY_BETWEEN_COMMITS = 1  # 提交之間的延遲(秒)
+    MAX_FILES_PER_COMMIT = 2  # 每次提交的最大文件數
+    
+class APIRateLimiter:
+    """API 速率限制器 - 防止觸發限制"""
+    
+    def __init__(self):
+        self.last_request_time = 0
+        self.retry_count = 0
+        self.backoff_time = RateLimitConfig.INITIAL_BACKOFF
+        self.failed_uploads = []
+        
+    def wait_before_request(self):
+        """在請求前等待，避免過於頻繁"""
+        elapsed = time.time() - self.last_request_time
+        if elapsed < RateLimitConfig.DELAY_BETWEEN_COMMITS:
+            wait_time = RateLimitConfig.DELAY_BETWEEN_COMMITS - elapsed
+            time.sleep(wait_time)
+    
+    def record_request(self):
+        """記錄請求時間"""
+        self.last_request_time = time.time()
+    
+    def handle_rate_limit_error(self):
+        """處理 API 限制錯誤"""
+        self.retry_count += 1
+        
+        if self.retry_count > RateLimitConfig.MAX_RETRIES:
+            log("Exceeded maximum retries. Stopping upload.", "ERROR")
+            return False
+        
+        # 指數退避
+        wait_time = min(
+            self.backoff_time * (2 ** (self.retry_count - 1)),
+            RateLimitConfig.MAX_BACKOFF
+        )
+        
+        log(f"Rate limit hit. Retrying in {wait_time}s (attempt {self.retry_count}/{RateLimitConfig.MAX_RETRIES})...", "WARNING")
+        time.sleep(wait_time)
+        return True
+    
+    def reset(self):
+        """重置重試計數"""
+        self.retry_count = 0
+        self.backoff_time = RateLimitConfig.INITIAL_BACKOFF
+    
+    def record_failure(self, symbol: str, files: List):
+        """記錄失敗的上傳"""
+        self.failed_uploads.append({
+            'symbol': symbol,
+            'files': files,
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    def get_failed_uploads(self) -> List:
+        """獲取失敗的上傳列表"""
+        return self.failed_uploads
 
 def log(message, level="INFO"):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -404,10 +474,21 @@ For research purposes only. Not financial advice.
 def upload_organized_files(token, username, repo_name, organized_files):
     """
     按幣種分類上傳到 klines/{SYMBOL}/ 目錄結構
+    包含 API 限制保護機制
     """
     print("\n" + "="*70)
-    print("STEP 4: CREATE REPO AND UPLOAD (ORGANIZED)")
+    print("STEP 4: CREATE REPO AND UPLOAD (WITH API PROTECTION)")
     print("="*70)
+    
+    # 初始化 API 限制器
+    rate_limiter = APIRateLimiter()
+    
+    # 顯示 API 保護配置
+    print(f"\nAPI Protection Configuration:")
+    print(f"  - Max retries: {RateLimitConfig.MAX_RETRIES}")
+    print(f"  - Delay between commits: {RateLimitConfig.DELAY_BETWEEN_COMMITS}s")
+    print(f"  - Max files per commit: {RateLimitConfig.MAX_FILES_PER_COMMIT}")
+    print(f"  - Request timeout: {RateLimitConfig.REQUEST_TIMEOUT}s")
     
     api = HfApi(token=token)
     repo_id = f"{username}/{repo_name}"
@@ -433,6 +514,7 @@ def upload_organized_files(token, username, repo_name, organized_files):
                 private=False
             )
             log(f"Repository created successfully", "SUCCESS")
+            time.sleep(2)  # 等待 repo 創建完成
         except Exception as e:
             log(f"Failed to create repository: {str(e)}", "ERROR")
             return None
@@ -443,8 +525,9 @@ def upload_organized_files(token, username, repo_name, organized_files):
     readme_content = readme_content.replace("{{USERNAME}}", username)
     
     try:
+        rate_limiter.wait_before_request()
         api.upload_folder(
-            folder_path=None,  # 我們手動上傳
+            folder_path=None,
             repo_id=repo_id,
             repo_type="dataset",
             path_in_repo="/",
@@ -455,6 +538,8 @@ def upload_organized_files(token, username, repo_name, organized_files):
                 )
             ]
         )
+        rate_limiter.record_request()
+        rate_limiter.reset()
         log(f"README.md uploaded", "SUCCESS")
     except Exception as e:
         log(f"Warning: Failed to upload README: {str(e)}", "WARNING")
@@ -472,33 +557,76 @@ def upload_organized_files(token, username, repo_name, organized_files):
         
         print(f"[{current_symbol:2d}/{total_symbols}] {symbol:10} ({len(files)} files)...", end=" ", flush=True)
         
-        try:
-            # 準備此幣種的所有文件的上傳操作
-            operations = []
-            for file_path in files:
-                remote_path = f"klines/{symbol}/{file_path.name}"
-                operations.append(
-                    CommitOperationAdd(
-                        path_in_repo=remote_path,
-                        path_or_fileobj=str(file_path)
+        # 將文件分塊上傳，每次最多上傳 MAX_FILES_PER_COMMIT 個
+        success = False
+        retry_count = 0
+        max_retries = RateLimitConfig.MAX_RETRIES
+        
+        while retry_count <= max_retries:
+            try:
+                # 準備此幣種的所有文件的上傳操作
+                for i in range(0, len(files), RateLimitConfig.MAX_FILES_PER_COMMIT):
+                    chunk = files[i:i + RateLimitConfig.MAX_FILES_PER_COMMIT]
+                    operations = []
+                    
+                    for file_path in chunk:
+                        remote_path = f"klines/{symbol}/{file_path.name}"
+                        operations.append(
+                            CommitOperationAdd(
+                                path_in_repo=remote_path,
+                                path_or_fileobj=str(file_path)
+                            )
+                        )
+                    
+                    # 等待後提交
+                    rate_limiter.wait_before_request()
+                    api.create_commit(
+                        repo_id=repo_id,
+                        repo_type="dataset",
+                        operations=operations,
+                        commit_message=f"Add {symbol} klines data (chunk {i//RateLimitConfig.MAX_FILES_PER_COMMIT + 1})"
                     )
-                )
-            
-            # 提交此幣種的所有文件
-            api.create_commit(
-                repo_id=repo_id,
-                repo_type="dataset",
-                operations=operations,
-                commit_message=f"Add {symbol} klines data"
-            )
-            
-            print("OK")
-            
-        except Exception as e:
-            print(f"ERROR: {str(e)[:50]}")
-            continue
+                    rate_limiter.record_request()
+                    rate_limiter.reset()
+                    
+                    # 小延遲以避免速率限制
+                    time.sleep(RateLimitConfig.DELAY_BETWEEN_COMMITS)
+                
+                print("OK")
+                success = True
+                break
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # 檢查是否是速率限制錯誤
+                if 'rate' in error_str or '429' in error_str or 'too many' in error_str:
+                    if rate_limiter.handle_rate_limit_error():
+                        retry_count += 1
+                        continue
+                    else:
+                        print(f"FAILED (rate limit)")
+                        rate_limiter.record_failure(symbol, files)
+                        break
+                else:
+                    # 其他錯誤
+                    print(f"ERROR: {str(e)[:50]}")
+                    rate_limiter.record_failure(symbol, files)
+                    break
+        
+        if not success and retry_count == 0:
+            log(f"{symbol} upload failed", "ERROR")
     
-    log(f"Upload completed successfully", "SUCCESS")
+    # 報告失敗的上傳
+    failed = rate_limiter.get_failed_uploads()
+    if failed:
+        log(f"Upload completed with {len(failed)} symbol(s) failed", "WARNING")
+        print(f"\nFailed uploads:")
+        for item in failed:
+            print(f"  - {item['symbol']}: {len(item['files'])} files")
+    else:
+        log(f"Upload completed successfully", "SUCCESS")
+    
     return repo_id
 
 def main():
@@ -506,7 +634,7 @@ def main():
     
     print("\n" + "="*70)
     print("HUGGING FACE DATASET UPLOADER")
-    print("Auto Create Repository Version (Organized by Symbol)")
+    print("Auto Create Repository Version (With API Protection)")
     print("="*70)
     
     # 步驟 1: 獲取 token
