@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SSL Hybrid V3 - Improved Implementation
-Better signal definition + stronger feature engineering
+Fixed array indexing and dimension issues
 """
 
 import numpy as np
@@ -17,28 +17,38 @@ class TechnicalIndicators:
     @staticmethod
     def rsi(data, period=14):
         """Relative Strength Index"""
-        delta = np.diff(data)
-        gain = np.where(delta > 0, delta, 0)
-        loss = np.where(delta < 0, -delta, 0)
+        data = np.asarray(data, dtype=np.float64)
+        n = len(data)
         
-        avg_gain = np.zeros(len(data))
-        avg_loss = np.zeros(len(data))
+        # Calculate deltas
+        deltas = np.diff(data)
+        gain = np.zeros(n)
+        loss = np.zeros(n)
         
-        avg_gain[period] = np.mean(gain[:period])
-        avg_loss[period] = np.mean(loss[:period])
+        gain[1:] = np.where(deltas > 0, deltas, 0)
+        loss[1:] = np.where(deltas < 0, -deltas, 0)
         
-        for i in range(period + 1, len(data)):
+        # Calculate averages
+        avg_gain = np.zeros(n)
+        avg_loss = np.zeros(n)
+        
+        avg_gain[period] = np.mean(gain[1:period+1])
+        avg_loss[period] = np.mean(loss[1:period+1])
+        
+        for i in range(period + 1, n):
             avg_gain[i] = (avg_gain[i-1] * (period - 1) + gain[i]) / period
             avg_loss[i] = (avg_loss[i-1] * (period - 1) + loss[i]) / period
         
         rs = np.where(avg_loss != 0, avg_gain / avg_loss, 0)
         rsi = 100 - (100 / (1 + rs))
+        rsi[:period] = 50  # Set initial values to neutral
         
         return rsi
     
     @staticmethod
     def macd(data, fast=12, slow=26, signal=9):
         """MACD"""
+        data = np.asarray(data, dtype=np.float64)
         ema_fast = pd.Series(data).ewm(span=fast, adjust=False).mean().values
         ema_slow = pd.Series(data).ewm(span=slow, adjust=False).mean().values
         macd_line = ema_fast - ema_slow
@@ -51,8 +61,13 @@ class TechnicalIndicators:
     @staticmethod
     def bollinger_bands(data, period=20, std_dev=2):
         """Bollinger Bands"""
+        data = np.asarray(data, dtype=np.float64)
         ma = pd.Series(data).rolling(period).mean().values
         std = pd.Series(data).rolling(period).std().values
+        
+        # Fill NaN values
+        ma = np.nan_to_num(ma, nan=data[0])
+        std = np.nan_to_num(std, nan=np.std(data[:period]))
         
         upper = ma + std_dev * std
         lower = ma - std_dev * std
@@ -62,8 +77,13 @@ class TechnicalIndicators:
     @staticmethod
     def atr(high, low, close, period=14):
         """Average True Range"""
-        tr = np.zeros(len(close))
-        for i in range(1, len(close)):
+        high = np.asarray(high, dtype=np.float64)
+        low = np.asarray(low, dtype=np.float64)
+        close = np.asarray(close, dtype=np.float64)
+        n = len(close)
+        
+        tr = np.zeros(n)
+        for i in range(1, n):
             tr1 = high[i] - low[i]
             tr2 = abs(high[i] - close[i-1])
             tr3 = abs(low[i] - close[i-1])
@@ -104,7 +124,9 @@ class SSLHybridV3:
             rsi_midzone = 45 < self.rsi14[i] < 55
             macd_bullish = self.macd_hist[i] > 0 and self.macd_line[i] > self.macd_signal[i]
             price_above_bb = self.close[i] > self.bb_mid[i]
-            volume_spike = self.volume[i] > np.mean(self.volume[i-20:i]) * 1.2
+            
+            vol_ma_20 = np.mean(self.volume[max(0, i-20):i])
+            volume_spike = self.volume[i] > vol_ma_20 * 1.2
             
             if (rsi_oversold or rsi_midzone) and macd_bullish and volume_spike:
                 self.buy_signal[i] = True
@@ -125,9 +147,9 @@ def extract_signals_v3(close, high, low, volume, indicator) -> List[Dict]:
     for i in range(n - 20):
         # Multi-timeframe validation
         if indicator.buy_signal[i]:
-            ret_5 = (close[i+5] - close[i]) / close[i]
-            ret_10 = (close[i+10] - close[i]) / close[i]
-            ret_20 = (close[i+20] - close[i]) / close[i]
+            ret_5 = (close[i+5] - close[i]) / close[i] if i+5 < n else 0
+            ret_10 = (close[i+10] - close[i]) / close[i] if i+10 < n else 0
+            ret_20 = (close[i+20] - close[i]) / close[i] if i+20 < n else 0
             
             # Composite label: at least 2/3 confirmations
             confirmations = sum([
@@ -153,9 +175,9 @@ def extract_signals_v3(close, high, low, volume, indicator) -> List[Dict]:
             })
         
         elif indicator.sell_signal[i]:
-            ret_5 = (close[i+5] - close[i]) / close[i]
-            ret_10 = (close[i+10] - close[i]) / close[i]
-            ret_20 = (close[i+20] - close[i]) / close[i]
+            ret_5 = (close[i+5] - close[i]) / close[i] if i+5 < n else 0
+            ret_10 = (close[i+10] - close[i]) / close[i] if i+10 < n else 0
+            ret_20 = (close[i+20] - close[i]) / close[i] if i+20 < n else 0
             
             confirmations = sum([
                 ret_5 < -0.003,
@@ -187,29 +209,33 @@ def extract_features_v3(signal: Dict, close, high, low, volume, indicator) -> Di
     idx = signal['index']
     features = {}
     
+    # Safety check
+    if idx < 20 or idx >= len(indicator.rsi14):
+        return {}
+    
     # 1. RSI features
-    features['rsi14'] = indicator.rsi14[idx] / 100.0  # Normalize to 0-1
-    features['rsi14_from_neutral'] = abs(indicator.rsi14[idx] - 50) / 50  # Distance from 50
-    features['rsi_trend'] = (indicator.rsi14[idx] - indicator.rsi14[max(0, idx-5)]) / 100
+    features['rsi14'] = float(indicator.rsi14[idx]) / 100.0  # Normalize to 0-1
+    features['rsi14_from_neutral'] = abs(float(indicator.rsi14[idx]) - 50) / 50  # Distance from 50
+    features['rsi_trend'] = (float(indicator.rsi14[idx]) - float(indicator.rsi14[max(0, idx-5)])) / 100
     
     # 2. MACD features
-    features['macd_hist'] = np.clip(indicator.macd_hist[idx] / signal['price'] * 100, -1, 1)
-    features['macd_bullish'] = 1.0 if indicator.macd_hist[idx] > 0 else 0.0
-    features['macd_signal_dist'] = np.clip(
-        (indicator.macd_line[idx] - indicator.macd_signal[idx]) / (abs(indicator.macd_signal[idx]) + 1e-8),
-        -1, 1
-    )
+    macd_price_ratio = float(indicator.macd_hist[idx]) / (signal['price'] + 1e-8)
+    features['macd_hist'] = np.clip(macd_price_ratio * 100, -1, 1)
+    features['macd_bullish'] = 1.0 if float(indicator.macd_hist[idx]) > 0 else 0.0
+    
+    macd_signal_ratio = (float(indicator.macd_line[idx]) - float(indicator.macd_signal[idx])) / (abs(float(indicator.macd_signal[idx])) + 1e-8)
+    features['macd_signal_dist'] = np.clip(macd_signal_ratio, -1, 1)
     
     # 3. Bollinger Bands features
-    bb_position = (signal['price'] - indicator.bb_lower[idx]) / (indicator.bb_upper[idx] - indicator.bb_lower[idx] + 1e-8)
+    bb_position = (signal['price'] - float(indicator.bb_lower[idx])) / (float(indicator.bb_upper[idx]) - float(indicator.bb_lower[idx]) + 1e-8)
     features['bb_position'] = np.clip(bb_position, 0, 1)
-    features['bb_distance_mid'] = (signal['price'] - indicator.bb_mid[idx]) / (indicator.atr[idx] + 1e-8)
+    features['bb_distance_mid'] = (signal['price'] - float(indicator.bb_mid[idx])) / (float(indicator.atr[idx]) + 1e-8)
     
     # 4. Volatility features
     vol_20 = np.std(close[max(0, idx-20):idx])
     mean_20 = np.mean(close[max(0, idx-20):idx])
     features['volatility'] = np.clip((vol_20 / (mean_20 + 1e-8)) * 100, 0, 5) / 5
-    features['atr_ratio'] = np.clip(indicator.atr[idx] / mean_20 * 100, 0, 5) / 5
+    features['atr_ratio'] = np.clip(float(indicator.atr[idx]) / (mean_20 + 1e-8) * 100, 0, 5) / 5
     
     # 5. Volume features
     vol_ma = np.mean(volume[max(0, idx-20):idx])
