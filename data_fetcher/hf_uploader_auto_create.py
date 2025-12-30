@@ -171,16 +171,16 @@ def parse_symbol_and_interval(filename):
 
 def organize_files_by_symbol(data_dir):
     """
-    掃描 CSV 文件，轉換為 Parquet，並按幣種組織成一個絆構化目錄
+    掃描 CSV 文件，轉換為 Parquet，並按幣種組織成一個結構化目錄
     建立以下結構:
     organized_data/
     ├── README.md
-    ├── klines/
-    │   ├── BTCUSDT/
-    │   │   ├── BTC_15m.parquet
-    │   │   └── BTC_1h.parquet
-    │   ├── ETHUSDT/
-    │   └── ...
+    └── klines/
+        ├── BTCUSDT/
+        │   ├── BTC_15m.parquet
+        │   └── BTC_1h.parquet
+        ├── ETHUSDT/
+        └── ...
     """
     print("\n" + "="*70)
     print("STEP 3B: ORGANIZE AND CONVERT FILES")
@@ -188,7 +188,7 @@ def organize_files_by_symbol(data_dir):
     
     data_path = Path(data_dir)
     
-    # 創建絆構化目錄
+    # 創建組織化目錄
     organized_dir = data_path / "organized_data"
     if organized_dir.exists():
         log(f"Removing existing organized data directory", "INFO")
@@ -419,8 +419,8 @@ For research purposes only. Not financial advice.
 
 def upload_to_huggingface(token, username, repo_name, organized_dir, readme_content):
     """
-    一次性上傳整個絆構化目錄到 HuggingFace
-    使用 upload_folder 据作 - 突凘操作數 最少
+    一次性上傳整個組織化目錄到 HuggingFace
+    使用正確的 upload_folder API
     """
     print("\n" + "="*70)
     print("STEP 4: UPLOAD TO HUGGINGFACE")
@@ -430,7 +430,7 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
     repo_id = f"{username}/{repo_name}"
     
     print(f"\nRepository ID: {repo_id}")
-    print(f"Upload method: Single folder upload (minimize API calls)")
+    print(f"Upload method: Single folder upload")
     print(f"Source directory: {organized_dir}")
     
     # 檢查 repo 是否存在
@@ -456,7 +456,7 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
             log(f"Failed to create repository: {str(e)}", "ERROR")
             return None
     
-    # 切存 README.md 到絆構化目錄
+    # 寫入 README.md 到組織化目錄
     readme_path = organized_dir / "README.md"
     with open(readme_path, 'w', encoding='utf-8') as f:
         f.write(readme_content)
@@ -472,7 +472,7 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
     try:
         start_time = time.time()
         
-        # 一次性上傳整個絆構化目錄
+        # 使用 upload_folder 一次性上傳整個組織化目錄
         api.upload_folder(
             folder_path=str(organized_dir),
             repo_id=repo_id,
@@ -483,10 +483,7 @@ def upload_to_huggingface(token, username, repo_name, organized_dir, readme_cont
                 "*.pyc",
                 "__pycache__",
                 ".git*",
-                "organized_data/.gitignore"
-            ],
-            multi_commit=True,  # 使用多個提交以优化
-            multi_commit_pr=False  # 不建立 PR
+            ]
         )
         
         elapsed = time.time() - start_time
@@ -528,7 +525,7 @@ def main():
     # 步驟 4: 產生 README
     readme_content = create_readme(repo_name, organized_files, total_rows, total_size)
     
-    # 步驟 5: 上傳整個整織化目錄
+    # 步驟 5: 上傳整個組織化目錄
     repo_id = upload_to_huggingface(token, username, repo_name, organized_dir, readme_content)
     
     if repo_id:
