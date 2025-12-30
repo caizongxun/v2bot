@@ -1,0 +1,179 @@
+{
+  "Momentum": {
+    "name": "Momentum",
+    "description": "Price momentum combined with volume",
+    "components": [
+      "price_change",
+      "log_volume"
+    ],
+    "weights": {
+      "price_change": 0.7,
+      "log_volume": 0.3
+    },
+    "stats": {
+      "mean": 0.293431,
+      "std": 0.32094,
+      "min": -0.004024,
+      "max": 2.073406,
+      "positive_pct": 99.03
+    }
+  },
+  "RSI_Extreme": {
+    "name": "RSI_Extreme",
+    "description": "RSI-based overbought/oversold detector",
+    "components": [
+      "RSI_7",
+      "RSI_14"
+    ],
+    "weights": {
+      "RSI_7": 0.6,
+      "RSI_14": 0.4
+    },
+    "stats": {
+      "mean": 50.605316,
+      "std": 17.409949,
+      "min": 0.0,
+      "max": 99.830653,
+      "positive_pct": 100.0
+    }
+  },
+  "Trend_Follow": {
+    "name": "Trend_Follow",
+    "description": "SMA-based trend following",
+    "components": [
+      "SMA_5",
+      "SMA_20",
+      "SMA_50"
+    ],
+    "weights": {
+      "SMA_5": 0.5,
+      "SMA_20": 0.3,
+      "SMA_50": 0.2
+    },
+    "stats": {
+      "mean": 45583.629424,
+      "std": 31659.145753,
+      "min": 4708.58262,
+      "max": 125370.94052,
+      "positive_pct": 100.0
+    }
+  },
+  "MACD_Momentum": {
+    "name": "MACD_Momentum",
+    "description": "MACD with momentum confirmation",
+    "components": [
+      "MACD",
+      "price_change"
+    ],
+    "weights": {
+      "MACD": 0.6,
+      "price_change": 0.4
+    },
+    "stats": {
+      "mean": 1.491881,
+      "std": 102.758477,
+      "min": -1050.596054,
+      "max": 1237.438414,
+      "positive_pct": 51.9
+    }
+  },
+  "Volatility": {
+    "name": "Volatility",
+    "description": "Volatility and range expansion",
+    "components": [
+      "high_low_ratio",
+      "log_volume"
+    ],
+    "weights": {
+      "high_low_ratio": 0.5,
+      "log_volume": 0.5
+    },
+    "stats": {
+      "mean": 0.490916,
+      "std": 0.535871,
+      "min": 0.0,
+      "max": 4.05749,
+      "positive_pct": 100.0
+    }
+  },
+  "RSI_SMA": {
+    "name": "RSI_SMA",
+    "description": "RSI combined with SMA trend",
+    "components": [
+      "RSI_21",
+      "SMA_10"
+    ],
+    "weights": {
+      "RSI_21": 0.55,
+      "SMA_10": 0.45
+    },
+    "stats": {
+      "mean": 20541.105869,
+      "std": 14247.299474,
+      "min": 2044.058423,
+      "max": 56515.842633,
+      "positive_pct": 100.0
+    }
+  },
+  "Price_MACD_RSI": {
+    "name": "Price_MACD_RSI",
+    "description": "Price + MACD + RSI combined",
+    "components": [
+      "price_change",
+      "MACD",
+      "RSI_14"
+    ],
+    "weights": {
+      "price_change": 0.4,
+      "MACD": 0.35,
+      "RSI_14": 0.25
+    },
+    "stats": {
+      "mean": 13.512053,
+      "std": 62.115881,
+      "min": -606.903655,
+      "max": 743.400425,
+      "positive_pct": 71.19
+    }
+  },
+  "Volume_Weighted": {
+    "name": "Volume_Weighted",
+    "description": "Volume-weighted price action",
+    "components": [
+      "price_change",
+      "volume_ratio",
+      "log_volume"
+    ],
+    "weights": {
+      "price_change": 0.5,
+      "volume_ratio": 0.3,
+      "log_volume": 0.2
+    },
+    "stats": {
+      "mean": 0.51109,
+      "std": 0.559424,
+      "min": -0.002365,
+      "max": 6.548913,
+      "positive_pct": 99.95
+    }
+  },
+  "Multi_Timeframe": {
+    "name": "Multi_Timeframe",
+    "description": "Multi-timeframe analysis (5m vs 50m)",
+    "components": [
+      "SMA_5",
+      "SMA_50"
+    ],
+    "weights": {
+      "SMA_5": 0.6,
+      "SMA_50": 0.4
+    },
+    "stats": {
+      "mean": 45582.824937,
+      "std": 31658.464921,
+      "min": 4749.78784,
+      "max": 125279.24504,
+      "positive_pct": 100.0
+    }
+  }
+}
