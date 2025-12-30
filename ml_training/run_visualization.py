@@ -21,7 +21,6 @@ from datetime import datetime, timedelta
 import warnings
 import argparse
 import sys
-import os
 
 warnings.filterwarnings('ignore')
 
@@ -229,7 +228,7 @@ class ModelVisualizer:
         print(f"  阻力: 实际={latest['Resistance_actual']:.4f}, 预測={latest['Resistance_pred']:.4f}")
         
         print(f"\n📈 RSI:")
-print(f"  实际={latest['RSI_actual']:.4f} (转探: {latest['RSI_actual']*50+50:.2f})")
+        print(f"  实际={latest['RSI_actual']:.4f} (转探: {latest['RSI_actual']*50+50:.2f})")
         print(f"  预測={latest['RSI_pred']:.4f} (转探: {latest['RSI_pred']*50+50:.2f})")
         
         print(f"\n🔄 MACD:")
