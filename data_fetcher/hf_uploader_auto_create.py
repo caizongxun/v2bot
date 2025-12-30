@@ -1,11 +1,11 @@
 """
-Hugging Face 數據集上傳器 - 自動創建 Repo 版 (按幣種分類 + API 保護)
+Hugging Face 數據集上傳器 - 一次性上傳整個資料夾
 
 功能:
 - 自動創建數據集 repo
-- 按幣種分類上傳數據
-- 內置 API 限制保護 (重試、速率控制、超時)
-- 自動故障恢復
+- CSV 轉換為 Parquet
+- 按幣種分類組織
+- 一次性上傳整個資料夾（減少 API 限制風險）
 
 使用方式:
 !pip install -q huggingface-hub pandas
@@ -17,85 +17,21 @@ import os
 import sys
 import time
 import json
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
 try:
-    from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo, CommitOperationAdd
+    from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo
     import pandas as pd
 except ImportError:
     print("[Installing required packages...]")
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "huggingface-hub", "pandas"])
-    from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo, CommitOperationAdd
+    from huggingface_hub import HfApi, HfFolder, repo_exists, create_repo
     import pandas as pd
     print("Packages installed successfully\n")
-
-# API 限制配置
-class RateLimitConfig:
-    """API 速率限制配置"""
-    MAX_RETRIES = 3  # 最大重試次數
-    INITIAL_BACKOFF = 2  # 初始退避時間(秒)
-    MAX_BACKOFF = 60  # 最大退避時間(秒)
-    REQUEST_TIMEOUT = 300  # 請求超時時間(秒)
-    DELAY_BETWEEN_COMMITS = 1  # 提交之間的延遲(秒)
-    MAX_FILES_PER_COMMIT = 2  # 每次提交的最大文件數
-    
-class APIRateLimiter:
-    """API 速率限制器 - 防止觸發限制"""
-    
-    def __init__(self):
-        self.last_request_time = 0
-        self.retry_count = 0
-        self.backoff_time = RateLimitConfig.INITIAL_BACKOFF
-        self.failed_uploads = []
-        
-    def wait_before_request(self):
-        """在請求前等待，避免過於頻繁"""
-        elapsed = time.time() - self.last_request_time
-        if elapsed < RateLimitConfig.DELAY_BETWEEN_COMMITS:
-            wait_time = RateLimitConfig.DELAY_BETWEEN_COMMITS - elapsed
-            time.sleep(wait_time)
-    
-    def record_request(self):
-        """記錄請求時間"""
-        self.last_request_time = time.time()
-    
-    def handle_rate_limit_error(self):
-        """處理 API 限制錯誤"""
-        self.retry_count += 1
-        
-        if self.retry_count > RateLimitConfig.MAX_RETRIES:
-            log("Exceeded maximum retries. Stopping upload.", "ERROR")
-            return False
-        
-        # 指數退避
-        wait_time = min(
-            self.backoff_time * (2 ** (self.retry_count - 1)),
-            RateLimitConfig.MAX_BACKOFF
-        )
-        
-        log(f"Rate limit hit. Retrying in {wait_time}s (attempt {self.retry_count}/{RateLimitConfig.MAX_RETRIES})...", "WARNING")
-        time.sleep(wait_time)
-        return True
-    
-    def reset(self):
-        """重置重試計數"""
-        self.retry_count = 0
-        self.backoff_time = RateLimitConfig.INITIAL_BACKOFF
-    
-    def record_failure(self, symbol: str, files: List):
-        """記錄失敗的上傳"""
-        self.failed_uploads.append({
-            'symbol': symbol,
-            'files': files,
-            'timestamp': datetime.now().isoformat()
-        })
-    
-    def get_failed_uploads(self) -> List:
-        """獲取失敗的上傳列表"""
-        return self.failed_uploads
 
 def log(message, level="INFO"):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -233,23 +169,41 @@ def parse_symbol_and_interval(filename):
     symbol_full = SYMBOL_MAP[symbol_short]
     return symbol_short, symbol_full, interval
 
-def convert_and_organize_files(data_dir):
+def organize_files_by_symbol(data_dir):
     """
-    掃描 CSV 文件，轉換為 Parquet，並按幣種組織
-    返回 {symbol_full: [parquet_files]}
+    掃描 CSV 文件，轉換為 Parquet，並按幣種組織成一個絆構化目錄
+    建立以下結構:
+    organized_data/
+    ├── README.md
+    ├── klines/
+    │   ├── BTCUSDT/
+    │   │   ├── BTC_15m.parquet
+    │   │   └── BTC_1h.parquet
+    │   ├── ETHUSDT/
+    │   └── ...
     """
     print("\n" + "="*70)
-    print("STEP 3B: CONVERT AND ORGANIZE FILES")
+    print("STEP 3B: ORGANIZE AND CONVERT FILES")
     print("="*70)
     
     data_path = Path(data_dir)
-    parquet_dir = data_path / "parquet"
-    parquet_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 創建絆構化目錄
+    organized_dir = data_path / "organized_data"
+    if organized_dir.exists():
+        log(f"Removing existing organized data directory", "INFO")
+        shutil.rmtree(organized_dir)
+    
+    organized_dir.mkdir(parents=True, exist_ok=True)
+    klines_dir = organized_dir / "klines"
+    klines_dir.mkdir(parents=True, exist_ok=True)
     
     csv_files = sorted(data_path.glob('*.csv'))
     organized_files = {}
+    total_rows = 0
+    total_size = 0
     
-    print(f"\nConverting {len(csv_files)} CSV files to Parquet...")
+    print(f"\nConverting and organizing {len(csv_files)} CSV files...")
     
     for csv_file in csv_files:
         symbol_short, symbol_full, interval = parse_symbol_and_interval(csv_file.name)
@@ -272,9 +226,13 @@ def convert_and_organize_files(data_dir):
             if 'trades' in df.columns:
                 df['trades'] = pd.to_numeric(df['trades'], errors='coerce')
             
+            # 建立幣種目錄
+            symbol_dir = klines_dir / symbol_full
+            symbol_dir.mkdir(parents=True, exist_ok=True)
+            
             # 保存為 Parquet
             parquet_filename = csv_file.stem + ".parquet"
-            parquet_path = parquet_dir / parquet_filename
+            parquet_path = symbol_dir / parquet_filename
             
             df.to_parquet(parquet_path, compression='snappy', index=False)
             
@@ -283,42 +241,30 @@ def convert_and_organize_files(data_dir):
             organized_files[symbol_full].append(parquet_path)
             
             size_mb = parquet_path.stat().st_size / (1024 * 1024)
-            log(f"{symbol_short:5} {interval:3} -> {parquet_filename:30} ({len(df):7,} rows, {size_mb:6.1f} MB)", "INFO")
+            total_rows += len(df)
+            total_size += parquet_path.stat().st_size
+            
+            log(f"{symbol_short:5} {interval:3} -> klines/{symbol_full}/{parquet_filename:30} ({len(df):7,} rows, {size_mb:6.1f} MB)", "INFO")
             
         except Exception as e:
             log(f"Failed to convert {csv_file.name}: {str(e)}", "ERROR")
             continue
     
-    total_files = sum(len(v) for v in organized_files.values())
-    log(f"Conversion complete: {len(organized_files)} symbols, {total_files} files", "SUCCESS")
-    
-    return organized_files
+    return organized_dir, organized_files, total_rows, total_size
 
-def create_readme(repo_name, organized_files, data_dir):
+def create_readme(repo_name, organized_files, total_rows, total_size):
     """產生 README.md"""
-    
-    # 統計信息
-    total_rows = 0
-    total_size = 0
-    
-    for files in organized_files.values():
-        for parquet_file in files:
-            try:
-                df = pd.read_parquet(parquet_file)
-                total_rows += len(df)
-                total_size += parquet_file.stat().st_size
-            except:
-                total_size += parquet_file.stat().st_size
     
     symbols = sorted(organized_files.keys())
     all_intervals = set()
     for files in organized_files.values():
         for f in files:
-            # 從檔名提取時間框架
             if '15m' in f.name:
                 all_intervals.add('15m')
             elif '1h' in f.name:
                 all_intervals.add('1h')
+    
+    total_files = sum(len(v) for v in organized_files.values())
     
     readme_content = f"""---
 license: mit
@@ -348,10 +294,10 @@ dataset_info:
     dtype: int64
   splits:
   - name: train
-    num_bytes: {total_size}
+    num_bytes: {int(total_size)}
     num_examples: {total_rows}
-  download_size: {total_size}
-  dataset_size: {total_size}
+  download_size: {int(total_size)}
+  dataset_size: {int(total_size)}
 ---
 
 # {repo_name}
@@ -362,7 +308,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## Dataset Info
 
-- Total Files: {sum(len(v) for v in organized_files.values())}
+- Total Files: {total_files}
 - Total Data Points: {total_rows:,}
 - Total Size: {total_size / (1024**2):.2f} MB
 - Symbols: {len(symbols)} cryptocurrencies
@@ -471,30 +417,21 @@ For research purposes only. Not financial advice.
     
     return readme_content
 
-def upload_organized_files(token, username, repo_name, organized_files):
+def upload_to_huggingface(token, username, repo_name, organized_dir, readme_content):
     """
-    按幣種分類上傳到 klines/{SYMBOL}/ 目錄結構
-    包含 API 限制保護機制
+    一次性上傳整個絆構化目錄到 HuggingFace
+    使用 upload_folder 据作 - 突凘操作數 最少
     """
     print("\n" + "="*70)
-    print("STEP 4: CREATE REPO AND UPLOAD (WITH API PROTECTION)")
+    print("STEP 4: UPLOAD TO HUGGINGFACE")
     print("="*70)
-    
-    # 初始化 API 限制器
-    rate_limiter = APIRateLimiter()
-    
-    # 顯示 API 保護配置
-    print(f"\nAPI Protection Configuration:")
-    print(f"  - Max retries: {RateLimitConfig.MAX_RETRIES}")
-    print(f"  - Delay between commits: {RateLimitConfig.DELAY_BETWEEN_COMMITS}s")
-    print(f"  - Max files per commit: {RateLimitConfig.MAX_FILES_PER_COMMIT}")
-    print(f"  - Request timeout: {RateLimitConfig.REQUEST_TIMEOUT}s")
     
     api = HfApi(token=token)
     repo_id = f"{username}/{repo_name}"
     
     print(f"\nRepository ID: {repo_id}")
-    print(f"Upload structure: klines/{{SYMBOL}}/{{filename}}")
+    print(f"Upload method: Single folder upload (minimize API calls)")
+    print(f"Source directory: {organized_dir}")
     
     # 檢查 repo 是否存在
     print(f"\nChecking if repo exists...")
@@ -514,127 +451,59 @@ def upload_organized_files(token, username, repo_name, organized_files):
                 private=False
             )
             log(f"Repository created successfully", "SUCCESS")
-            time.sleep(2)  # 等待 repo 創建完成
+            time.sleep(2)
         except Exception as e:
             log(f"Failed to create repository: {str(e)}", "ERROR")
             return None
     
-    # 上傳 README
-    log(f"Generating and uploading README.md...", "INFO")
-    readme_content = create_readme(repo_name, organized_files, "")
-    readme_content = readme_content.replace("{{USERNAME}}", username)
+    # 切存 README.md 到絆構化目錄
+    readme_path = organized_dir / "README.md"
+    with open(readme_path, 'w', encoding='utf-8') as f:
+        f.write(readme_content)
+    log(f"README.md created", "SUCCESS")
+    
+    # 一次性上傳整個目錄
+    print(f"\n" + "-"*70)
+    print(f"Uploading entire dataset folder...")
+    print(f"This may take 30-90 minutes depending on your connection.")
+    print(f"You can monitor progress at: https://huggingface.co/datasets/{repo_id}")
+    print("-"*70)
     
     try:
-        rate_limiter.wait_before_request()
+        start_time = time.time()
+        
+        # 一次性上傳整個絆構化目錄
         api.upload_folder(
-            folder_path=None,
+            folder_path=str(organized_dir),
             repo_id=repo_id,
             repo_type="dataset",
-            path_in_repo="/",
-            operations=[
-                CommitOperationAdd(
-                    path_in_repo="README.md",
-                    path_or_fileobj=readme_content.encode()
-                )
-            ]
+            commit_message="Initial dataset upload - Crypto OHLCV data from Binance",
+            ignore_patterns=[
+                "*.csv",  # 忽略原始 CSV
+                "*.pyc",
+                "__pycache__",
+                ".git*",
+                "organized_data/.gitignore"
+            ],
+            multi_commit=True,  # 使用多個提交以优化
+            multi_commit_pr=False  # 不建立 PR
         )
-        rate_limiter.record_request()
-        rate_limiter.reset()
-        log(f"README.md uploaded", "SUCCESS")
+        
+        elapsed = time.time() - start_time
+        log(f"Upload completed successfully in {elapsed/60:.1f} minutes", "SUCCESS")
+        return repo_id
+        
     except Exception as e:
-        log(f"Warning: Failed to upload README: {str(e)}", "WARNING")
-    
-    # 按幣種分塊上傳
-    print(f"\nStarting upload of {len(organized_files)} symbols...")
-    print(f"Files will be organized in: klines/{{SYMBOL}}/\n")
-    
-    total_symbols = len(organized_files)
-    current_symbol = 0
-    
-    for symbol in sorted(organized_files.keys()):
-        current_symbol += 1
-        files = organized_files[symbol]
-        
-        print(f"[{current_symbol:2d}/{total_symbols}] {symbol:10} ({len(files)} files)...", end=" ", flush=True)
-        
-        # 將文件分塊上傳，每次最多上傳 MAX_FILES_PER_COMMIT 個
-        success = False
-        retry_count = 0
-        max_retries = RateLimitConfig.MAX_RETRIES
-        
-        while retry_count <= max_retries:
-            try:
-                # 準備此幣種的所有文件的上傳操作
-                for i in range(0, len(files), RateLimitConfig.MAX_FILES_PER_COMMIT):
-                    chunk = files[i:i + RateLimitConfig.MAX_FILES_PER_COMMIT]
-                    operations = []
-                    
-                    for file_path in chunk:
-                        remote_path = f"klines/{symbol}/{file_path.name}"
-                        operations.append(
-                            CommitOperationAdd(
-                                path_in_repo=remote_path,
-                                path_or_fileobj=str(file_path)
-                            )
-                        )
-                    
-                    # 等待後提交
-                    rate_limiter.wait_before_request()
-                    api.create_commit(
-                        repo_id=repo_id,
-                        repo_type="dataset",
-                        operations=operations,
-                        commit_message=f"Add {symbol} klines data (chunk {i//RateLimitConfig.MAX_FILES_PER_COMMIT + 1})"
-                    )
-                    rate_limiter.record_request()
-                    rate_limiter.reset()
-                    
-                    # 小延遲以避免速率限制
-                    time.sleep(RateLimitConfig.DELAY_BETWEEN_COMMITS)
-                
-                print("OK")
-                success = True
-                break
-                
-            except Exception as e:
-                error_str = str(e).lower()
-                
-                # 檢查是否是速率限制錯誤
-                if 'rate' in error_str or '429' in error_str or 'too many' in error_str:
-                    if rate_limiter.handle_rate_limit_error():
-                        retry_count += 1
-                        continue
-                    else:
-                        print(f"FAILED (rate limit)")
-                        rate_limiter.record_failure(symbol, files)
-                        break
-                else:
-                    # 其他錯誤
-                    print(f"ERROR: {str(e)[:50]}")
-                    rate_limiter.record_failure(symbol, files)
-                    break
-        
-        if not success and retry_count == 0:
-            log(f"{symbol} upload failed", "ERROR")
-    
-    # 報告失敗的上傳
-    failed = rate_limiter.get_failed_uploads()
-    if failed:
-        log(f"Upload completed with {len(failed)} symbol(s) failed", "WARNING")
-        print(f"\nFailed uploads:")
-        for item in failed:
-            print(f"  - {item['symbol']}: {len(item['files'])} files")
-    else:
-        log(f"Upload completed successfully", "SUCCESS")
-    
-    return repo_id
+        log(f"Upload failed: {str(e)}", "ERROR")
+        print(f"\nFull error: {type(e).__name__}: {e}")
+        return None
 
 def main():
     """主執行函數"""
     
     print("\n" + "="*70)
     print("HUGGING FACE DATASET UPLOADER")
-    print("Auto Create Repository Version (With API Protection)")
+    print("Bulk Upload Version (Single Folder Upload)")
     print("="*70)
     
     # 步驟 1: 獲取 token
@@ -645,16 +514,22 @@ def main():
     # 步驟 2: 獲取 repo 名稱
     repo_name = get_repo_name()
     
-    # 步驟 3: 獲取數據目錄並轉換
+    # 步驟 3: 組織數據並轉換
     data_dir = get_data_directory()
-    organized_files = convert_and_organize_files(data_dir)
+    organized_dir, organized_files, total_rows, total_size = organize_files_by_symbol(data_dir)
     
     if not organized_files:
         log("No files to upload. Aborted.", "ERROR")
         return
     
-    # 步驟 4: 創建 repo 並上傳
-    repo_id = upload_organized_files(token, username, repo_name, organized_files)
+    total_files = sum(len(v) for v in organized_files.values())
+    log(f"Conversion complete: {len(organized_files)} symbols, {total_files} files, {total_size/(1024**2):.2f} MB", "SUCCESS")
+    
+    # 步驟 4: 產生 README
+    readme_content = create_readme(repo_name, organized_files, total_rows, total_size)
+    
+    # 步驟 5: 上傳整個整織化目錄
+    repo_id = upload_to_huggingface(token, username, repo_name, organized_dir, readme_content)
     
     if repo_id:
         print("\n" + "="*70)
