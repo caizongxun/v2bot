@@ -338,12 +338,12 @@ def organize_and_upload(repo_id, token):
         log(f"Uploading organized datasets to {repo_id}...", "INFO")
         print("This may take 10-20 minutes...\n")
         
+        # 使用標準 upload_folder 參數（不使用 multi_commit）
         api.upload_folder(
             folder_path=str(organized_dir),
             repo_id=repo_id,
             repo_type="dataset",
-            commit_message="Reorganized datasets: grouped by symbol with combined datasets",
-            multi_commit=False
+            commit_message="Reorganized datasets: grouped by symbol with combined datasets"
         )
         
         log(f"Upload completed successfully", "SUCCESS")
